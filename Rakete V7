@@ -453,6 +453,8 @@ if (typeof Chart !== 'undefined') {
 let measuring = false;
 let autoScroll = true;
 let flightNumber = 1;
+document.getElementById('peakValueLabel').innerText = '0.00';
+document.getElementById('peakTimeLabel').innerText = '0';
 
 function toggleMeasurement(){
     measuring = !measuring;
@@ -486,6 +488,13 @@ async function fetchData(){
         logBox.innerHTML += '[' + Math.round(d.t/1000) + 's] Höhe: ' + d.alt.toFixed(2) + ' m<br>';
         if(d.event && d.event.length>0) eventBox.innerHTML += '[' + Math.round(d.t/1000) + 's] ' + d.event + '<br>';
         if(autoScroll){ logBox.scrollTop=logBox.scrollHeight; eventBox.scrollTop=eventBox.scrollHeight; }
+        if(measuring && chart){
+            if(d.alt > peakValue){
+                peakValue = Number(d.alt.toFixed(2));
+                peakTime = Math.round(d.t/1000);
+            }
+            document.getElementById('peakValueLabel').innerText = peakValue.toFixed(2);
+            document.getElementById('peakTimeLabel').innerText = peakTime;
         if(d.alt > peakValue){
             peakValue = Number(d.alt.toFixed(2));
             peakTime = Math.round(d.t/1000);
@@ -510,6 +519,7 @@ async function fetchData(){
         else{ sdLed.classList.remove('green'); sdLed.classList.add('red'); sdText.innerText = '🔴 Speichert nicht'; }
     } catch(e){ console.error(e); }
 }
+fetchData();
 setInterval(fetchData,1000);
 function deployParachute(){fetch('/deploy');}
 function resetAll(){fetch('/reset'); document.getElementById('logBox').innerHTML=''; document.getElementById('eventBox').innerHTML=''; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; peakTime=0; document.getElementById('peakValueLabel').innerText='0.00'; document.getElementById('peakTimeLabel').innerText='0'; chart.update(); }}
