@@ -320,52 +320,6 @@ let ctx = canvas.getContext('2d');
 let peakValue = 0;
 let chart = null;
 
-function createFallbackChart(canvas, ctx) {
-    const fallback = {
-        data: { labels: [], datasets: [{ data: [] }] },
-        update: function() {
-            const labels = this.data.labels;
-            const values = this.data.datasets[0].data.map(v => Number(v));
-            const cssWidth = canvas.clientWidth || 750;
-            const cssHeight = canvas.clientHeight || 300;
-            if (canvas.width !== cssWidth) canvas.width = cssWidth;
-            if (canvas.height !== cssHeight) canvas.height = cssHeight;
-            const w = canvas.width;
-            const h = canvas.height;
-            ctx.clearRect(0, 0, w, h);
-            ctx.fillStyle = '#0f0f12';
-            ctx.fillRect(0, 0, w, h);
-
-            if (values.length < 2) return;
-
-            const minV = Math.min(...values);
-            const maxV = Math.max(...values);
-            const range = Math.max(1, maxV - minV);
-            const pad = 24;
-            const innerW = w - pad * 2;
-            const innerH = h - pad * 2;
-
-            ctx.strokeStyle = '#2a2a2c';
-            ctx.lineWidth = 1;
-            ctx.strokeRect(pad, pad, innerW, innerH);
-
-            ctx.beginPath();
-            values.forEach((v, i) => {
-                const x = pad + (i / Math.max(1, values.length - 1)) * innerW;
-                const y = pad + innerH - ((v - minV) / range) * innerH;
-                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-            });
-            ctx.strokeStyle = 'cyan';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-        },
-        toBase64Image: function() {
-            return canvas.toDataURL('image/png');
-        }
-    };
-    return fallback;
-}
-
 if (typeof Chart !== 'undefined') {
     chart = new Chart(ctx, {
         type: 'line',
@@ -394,8 +348,9 @@ if (typeof Chart !== 'undefined') {
         }
     });
 } else {
-    console.warn('Chart.js konnte nicht geladen werden; nutze Fallback-Diagramm.');
-    chart = createFallbackChart(canvas, ctx);
+    console.warn('Chart.js konnte nicht geladen werden; Diagramm ist deaktiviert.');
+    let chartEl = document.getElementById('chart');
+    if (chartEl) chartEl.style.display = 'none';
 }
 
 let measuring = false;
@@ -434,7 +389,7 @@ async function fetchData(){
         logBox.innerHTML += '[' + Math.round(d.t/1000) + 's] Höhe: ' + d.alt.toFixed(2) + ' m<br>';
         if(d.event && d.event.length>0) eventBox.innerHTML += '[' + Math.round(d.t/1000) + 's] ' + d.event + '<br>';
         if(autoScroll){ logBox.scrollTop=logBox.scrollHeight; eventBox.scrollTop=eventBox.scrollHeight; }
-        if(chart){
+        if(measuring && chart){
             if(d.alt > peakValue) peakValue = d.alt;
             chart.data.labels.push(Math.round(d.t/1000));
             chart.data.datasets[0].data.push(d.alt.toFixed(2));
