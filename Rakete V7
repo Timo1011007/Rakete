@@ -1,0 +1,811 @@
+#include <Wire.h>
+#include <Adafruit_BMP280.h>
+#include <Adafruit_Sensor.h>
+#include <ESP32Servo.h>
+#include <WiFi.h>
+#include <WebServer.h>
+#include <Preferences.h>
+#include <SD.h>
+
+// 🔹 SD-Karten Unterstützung
+
+// --- Access Point Daten ---
+const char* ap_ssid = "Wasserrakete";
+const char* ap_password = "12345678";
+
+// Webserver auf Port 80
+WebServer server(80);
+
+// --- Sensor & Hardware ---
+Adafruit_BMP280 bmp;
+#define SERVO_PIN 2
+#define LED_PIN 8 // LED auf Pin 8 (Onboard/extern je nach Setup)
+//SDA ist 4
+//SCL ist 5
+
+// --- SD-Karte Pins ---
+#define SD_MISO 7
+#define SD_MOSI 6
+#define SD_SCK 9
+#define SD_CS 10
+bool sd_ok = false;
+
+//Servo Pins
+//Daten auf 2
+//Plus an Plus
+//Minus an Minus
+
+// --- Flugmanagement ---
+int flightNumber = 1;
+String currentFlightFile = "/flight1.csv";
+bool sdLoggingEnabled = false; // SD-Logging temporär aktivierbar
+
+// --- Variablen ---
+bool sensor_ok = false;
+float startAltitude = 0;
+float groundOffset = 0;
+bool groundSet = false;
+Servo servo;
+Preferences preferences;
+
+// Fallüberwachung
+float maxAltitude = -1000;
+bool parachuteDeployed = false;
+float fallTolerance = 2;
+unsigned long deployTime = 0;
+unsigned long zurueck = 5000; //Zeit nachdem der Fallschirm zurückgedreht wird 10000 = 10 sek
+
+// Filter / Mittelwert
+const int filterSize = 5;
+float altitudeHistory[filterSize] = {0};
+int historyIndex = 0;
+bool historyFull = false;
+
+// Gleitender Mittelwert
+const int movingAverageSize = 5;
+float movingBuffer[movingAverageSize] = {0};
+int movingIndex = 0;
+bool movingFull = false;
+
+// Steig-Toleranz
+float riseTolerance = 1.0;
+
+// Globale Variablen
+float currentAltitude = 0;
+float displayAltitude = 0;
+float smoothedAltitude = 0;
+float maxAltitudeSend = 0;
+unsigned long millisStart = 0;
+bool measuring = false;
+String lastEvent = "";
+
+// --- Statusvariablen ---
+bool statusBMP = false;
+bool statusServo = false;
+bool statusWiFi = false;
+
+// --- LED ---
+bool ledState = false;
+unsigned long lastBlink = 0;
+unsigned long blinkInterval = 250;
+
+// --- SD-Logging ---
+File logFile;
+void logData(String data) {
+  if(sd_ok && sdLoggingEnabled) {
+    logFile = SD.open(currentFlightFile, FILE_APPEND);
+    if(logFile){
+      logFile.println(data);
+      logFile.close();
+    }
+  }
+}
+
+// --- SD-Status prüfen (dynamisch) ---
+bool checkSDStatus() {
+  if (sd_ok) {
+    // Falls Datei nicht mehr existiert -> Karte entfernt
+    if (!SD.exists(currentFlightFile)) {
+      sd_ok = false;
+      lastEvent = "❌ SD-Karte entfernt!";
+      Serial.println(lastEvent);
+      logData("STATUS,SD," + String(millis() / 1000.0) + ",SD-Karte entfernt");
+    }
+  } else {
+    if (SD.begin(SD_CS)) {
+      sd_ok = true;
+      lastEvent = "💾 SD-Karte wieder erkannt!";
+      Serial.println(lastEvent);
+      logData("STATUS,SD," + String(millis() / 1000.0) + ",SD-Karte erkannt");
+      // ensure flight file exists
+      if (!SD.exists(currentFlightFile)) {
+        File f = SD.open(currentFlightFile, FILE_WRITE);
+        if(f) f.close();
+      }
+    }
+  }
+  return sd_ok;
+}
+
+// --- Funktionen ---
+bool isStrictlyIncreasing() {
+  if (!historyFull) return false;
+  for (int i = 1; i < filterSize; i++) {
+    if (altitudeHistory[i] + riseTolerance < altitudeHistory[i - 1]) return false;
+  }
+  return true;
+}
+
+float getSmoothedAltitude(float newVal) {
+  movingBuffer[movingIndex] = newVal;
+  movingIndex = (movingIndex + 1) % movingAverageSize;
+  if (movingIndex == 0) movingFull = true;
+  int n = movingFull ? movingAverageSize : movingIndex;
+  if (n == 0) return newVal;
+  float sum = 0;
+  for (int i = 0; i < n; i++) sum += movingBuffer[i];
+  return sum / n;
+}
+
+void resetAll() {
+  maxAltitudeSend = 0;
+  maxAltitude = -1000;
+  historyIndex = 0;
+  historyFull = false;
+  movingIndex = 0;
+  movingFull = false;
+  for (int i = 0; i < filterSize; i++) altitudeHistory[i] = 0;
+  for (int i = 0; i < movingAverageSize; i++) movingBuffer[i] = 0;
+  lastEvent = "🔄 Gesamter Reset durchgeführt!";
+  Serial.println("🔄 Gesamter Reset durchgeführt!");
+  logData("RESET,," + String(millis() / 1000.0) + ",Gesamter Reset durchgeführt");
+}
+
+void setGroundLevel() {
+  groundOffset = currentAltitude - startAltitude;
+  groundSet = true;
+  lastEvent = "📌 Ground-Level neu gesetzt auf 0 m!";
+  Serial.println(lastEvent);
+  logData("GROUNDSET,," + String(millis() / 1000.0) + ",Ground-Level neu gesetzt");
+}
+
+void checkComponentStatus() {
+  static bool lastStatusBMP = statusBMP;
+  static bool lastStatusServo = statusServo;
+  static bool lastStatusWiFi = statusWiFi;
+
+// --- BMP280 ---
+bool currentBMP = sensor_ok;
+if (currentBMP != lastStatusBMP) {
+  statusBMP = currentBMP;
+  lastEvent = currentBMP ? "✅ BMP280 jetzt OK!" : "❌ BMP280 Fehler!";
+  Serial.println(lastEvent);
+  logData("STATUS,BMP," + String(millis() / 1000.0) + "," + lastEvent);
+  lastStatusBMP = currentBMP;
+}
+
+  // --- Servo (simple availability flag) ---
+  bool currentServo = true;
+  if (currentServo != lastStatusServo) {
+    statusServo = currentServo;
+    lastEvent = currentServo ? "✅ Servo OK!" : "❌ Servo Fehler!";
+    Serial.println(lastEvent);
+    logData("STATUS,SERVO," + String(millis() / 1000.0) + "," + lastEvent);
+    lastStatusServo = currentServo;
+  }
+
+  // --- WiFi ---
+  bool currentWiFi = WiFi.softAPgetStationNum() >= 0;
+  if (currentWiFi != lastStatusWiFi) {
+    statusWiFi = currentWiFi;
+    lastEvent = currentWiFi ? "📡 WLAN verbunden!" : "❌ WLAN getrennt!";
+    Serial.println(lastEvent);
+    logData("STATUS,WIFI," + String(millis() / 1000.0) + "," + lastEvent);
+    lastStatusWiFi = currentWiFi;
+  }
+
+  // --- SD-Karte ---
+  checkSDStatus();
+}
+
+// Komplett neue getPage()-Funktion mit aufgewertetem Chart (farbige Kurven, animierter Peak-Marker)
+String getPage() {
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+  html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+  html += "<title>Wasserrakete Dashboard</title>";
+
+  // CSS für professionelles Layout und Chart
+  html += "<style>"
+          "body{font-family:Inter, sans-serif;background:#0d1117;color:#eaeaea;margin:0;padding:20px;}"
+          "h1{color:#4ade80;text-align:center;margin-bottom:25px;font-weight:600;}"
+          ".card{background:#16181f;padding:20px;border-radius:14px;max-width:900px;margin:15px auto;box-shadow:0 0 20px rgba(0,0,0,0.5);}"
+          ".section-title{font-size:20px;margin-bottom:15px;font-weight:500;color:#22c55e;}"
+          ".value-box{font-size:18px;margin:10px 0;font-weight:500;}"
+          ".button-row{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:15px;}"
+          ".btn{padding:12px 20px;font-size:15px;border:none;border-radius:10px;cursor:pointer;color:#fff;font-weight:500;transition:0.2s;}"
+          ".btn:hover{transform:translateY(-2px);opacity:0.9;}"
+          ".btn-blue{background:#3b82f6;}"
+          ".btn-green{background:#22c55e;}"
+          ".btn-red{background:#ef4444;}"
+          ".btn-orange{background:#f97316;}"
+          ".btn-disabled{background:#555 !important;cursor:not-allowed;opacity:0.6;}"
+          ".log-container{display:flex;gap:15px;flex-wrap:wrap;margin-top:20px;}"
+          ".log-box{background:#141416;color:#eaeaea;padding:12px;overflow-y:auto;border-radius:10px;flex:1;height:260px;font-family:monospace;font-size:14px;}"
+          "#chart{width:96%;max-width:750px;height:300px;margin:20px auto;display:none;border:1px solid #2a2a2c;border-radius:12px;background:#0f0f12;}"
+          ".sd-status{margin-top:18px;font-size:16px;display:flex;align-items:center;justify-content:center;gap:12px;}"
+          ".led{width:18px;height:18px;border-radius:50%;display:inline-block;box-shadow:0 0 10px rgba(0,0,0,0.5);}"
+          ".led.green{background:#4ade80;animation:blink 2s infinite;}"
+          ".led.red{background:#ef4444;}"
+          "@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0.25}}"
+          "input[type=number]{padding:6px;border-radius:8px;border:none;background:#2a2a2c;color:#fff;width:80px;}"
+          "</style>";
+
+  html += "<script src='https://cdn.jsdelivr.net/npm/chart.js'></script>";
+  html += "</head><body>";
+
+  // Dashboard Card
+  html += "<div class='card'>";
+  html += "<h1>Wasserrakete Dashboard</h1>";
+
+  html += "<div class='value-box'><strong>Flug:</strong> <span id='currentFlight'>" + String(flightNumber) + "</span></div>";
+  html += "<div class='value-box'>Höhe: <span id='alt'>0</span> m</div>";
+  html += "<div class='value-box'>Peak: <span id='max'>0</span> m</div>";
+
+  // Fallhöhe
+  html += "<div class='value-box'>Auslösdifferenz: <input type='number' id='fallInput' value='" + String(fallTolerance,1) + "' step='0.1'> <button class='btn btn-green' onclick='setFall()'>💾</button></div>";
+
+  // Aktion Buttons
+  html += "<div class='button-row'>";
+  html += "<button id='deployBtn' class='btn btn-blue' onclick='deployParachute()'>🪂 Fallschirm</button>";
+  html += "<button class='btn btn-green' onclick='toggleMeasurement()' id='startStopBtn'>▶ Start</button>";
+  html += "<button class='btn btn-red' onclick='resetAll()'>🔄 Reset</button>";
+  html += "<button class='btn btn-orange' onclick='setGround()'>📌 Ground</button>";
+  html += "<button class='btn btn-blue' onclick=\"window.open('/download','_blank')\">📂 SD-Daten</button>";
+  html += "<button class='btn btn-blue' onclick='newFlight()'>✈️ Neuer Flug</button>";
+  html += "<button class='btn btn-orange' onclick='toggleSD()'>💾 SD-Logging</button>";
+  html += "</div>";
+
+  // SD Status
+html += "<div class='sd-status'>SD-Status: <div id='sdLed' class='led red'></div> <span id='sdText'>🔴 Nicht speichert</span></div>";
+
+// Chart
+html += "<canvas id='chart'></canvas>";
+
+// Download-Button für Diagramm
+html += "<div style='text-align:center;margin-top:10px;'>";
+html += "<button class='btn btn-blue' onclick='downloadChart()'>📊 Diagramm herunterladen (PNG)</button>";
+html += "</div>";
+
+// Logs
+html += "<div class='log-container'>";
+html += "<div class='log-box' id='logBox'></div>";
+html += "<div class='log-box' id='eventBox'></div>";
+html += "</div>";
+
+html += "<button class='btn btn-orange' id='autoScrollBtn' onclick='toggleAutoScroll()' style='margin-top:10px;'>🔄 Auto-Scroll: AN</button>";
+
+
+  // Komponentenstatus
+  html += "<h2 class='section-title'>🔧 Komponentenstatus</h2>";
+  html += "<div style='font-size:15px;text-align:left;margin:0 auto;width:260px;background:#1a1a1c;padding:15px;border-radius:10px;'>";
+  html += "BMP280: <span id='statusBMP'>?</span><br>";
+  html += "Servo: <span id='statusServo'>?</span><br>";
+  html += "WLAN: <span id='statusWiFi'>?</span><br>";
+  html += "SD-Karte: <span id='statusSD'>?</span>";
+  html += "</div>";
+
+  // JavaScript für Chart mit Peak Marker
+  html += R"rawliteral(
+<script>
+let ctx = document.getElementById('chart').getContext('2d');
+let peakValue = 0;
+let chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: [],
+        datasets: [{
+            label: 'Höhe (m)',
+            data: [],
+            borderColor: 'cyan',
+            backgroundColor: 'rgba(0, 255, 255, 0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: 3,
+            pointBackgroundColor: function(context){
+                let value = context.raw;
+                return value === peakValue ? 'yellow' : 'cyan';
+            }
+        }]
+    },
+    options: {
+        scales: {
+            x: { title: { display: true, text: 'Zeit (s)' } },
+            y: { title: { display: true, text: 'Höhe (m)' } }
+        },
+        plugins: { legend: { display: false } }
+    }
+});
+
+let measuring = false;
+let autoScroll = true;
+let flightNumber = 1;
+
+function toggleMeasurement(){
+    measuring = !measuring;
+    document.getElementById('startStopBtn').innerText = measuring ? '⏸ Stop' : '▶ Start';
+    if(measuring) document.getElementById('chart').style.display='block';
+}
+
+function toggleAutoScroll(){
+    autoScroll = !autoScroll;
+    document.getElementById('autoScrollBtn').innerText = autoScroll ? '🔄 Auto-Scroll: AN' : '🔄 Auto-Scroll: AUS';
+}
+
+function downloadChart(){
+    const link = document.createElement('a');
+    link.href = chart.toBase64Image();
+    link.download = 'flug_' + flightNumber + '_diagramm.png';
+    link.click();
+}
+
+
+async function fetchData(){
+    try {
+        let res = await fetch('/data');
+        if(!res.ok) return;
+        let d = await res.json();
+        document.getElementById('alt').innerText = d.alt.toFixed(2);
+        document.getElementById('max').innerText = d.max.toFixed(2);
+        let logBox = document.getElementById('logBox');
+        let eventBox = document.getElementById('eventBox');
+        logBox.innerHTML += '[' + Math.round(d.t/1000) + 's] Höhe: ' + d.alt.toFixed(2) + ' m<br>';
+        if(d.event && d.event.length>0) eventBox.innerHTML += '[' + Math.round(d.t/1000) + 's] ' + d.event + '<br>';
+        if(autoScroll){ logBox.scrollTop=logBox.scrollHeight; eventBox.scrollTop=eventBox.scrollHeight; }
+        if(measuring){
+            if(d.alt > peakValue) peakValue = d.alt;
+            chart.data.labels.push(Math.round(d.t/1000));
+            chart.data.datasets[0].data.push(d.alt.toFixed(2));
+            if(chart.data.labels.length>100){ chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
+            chart.update();
+        }
+        document.getElementById('statusBMP').innerText = d.statusBMP ? '✅ OK' : '❌ Fehler';
+        document.getElementById('statusServo').innerText = d.statusServo ? '✅ OK' : '❌ Fehler';
+        document.getElementById('statusWiFi').innerText = d.statusWiFi ? '📡 OK' : '❌ Kein WLAN';
+        document.getElementById('statusSD').innerText = d.statusSD ? '💾 OK' : '❌ Fehler';
+        let sdLed = document.getElementById('sdLed');
+        let sdText = document.getElementById('sdText');
+        if(d.sdSaving){ sdLed.classList.remove('red'); sdLed.classList.add('green'); sdText.innerText = '🟢 Speichert'; }
+        else{ sdLed.classList.remove('green'); sdLed.classList.add('red'); sdText.innerText = '🔴 Speichert nicht'; }
+    } catch(e){ console.error(e); }
+}
+setInterval(fetchData,1000);
+function deployParachute(){fetch('/deploy');}
+function resetAll(){fetch('/reset'); document.getElementById('logBox').innerHTML=''; document.getElementById('eventBox').innerHTML=''; chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update();}
+function setFall(){let val=document.getElementById('fallInput').value;fetch('/setFall?value='+val);}
+function setGround(){fetch('/setGround');}
+function newFlight(){fetch('/newFlight').then(()=>{ flightNumber++; document.getElementById('currentFlight').innerText='Flug '+flightNumber; chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update(); });}
+function toggleSD(){fetch('/toggleSD');}
+</script>
+)rawliteral";
+
+  html += "</div></body></html>";
+  return html;
+}
+
+
+// --- Setup ---
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, LOW);
+  servo.attach(SERVO_PIN, 500, 2500);
+  servo.write(0);
+
+  // --- BMP280 ---
+  Serial.println("Starte BMP280-Test...");
+  Wire.begin(4, 5);
+  if (!bmp.begin(0x76)) {
+    Serial.println("⚠️ Kein BMP280 gefunden!");
+    lastEvent = "⚠️ BMP280 nicht gefunden!";
+    sensor_ok = false;
+    statusBMP = false;
+  } else {
+    Serial.println("✅ BMP280 erkannt!");
+    lastEvent = "✅ BMP280 erkannt!";
+    sensor_ok = true;
+    statusBMP = true;
+    const int nSamples = 30;
+    float sum = 0;
+    for (int i = 0; i < nSamples; i++) {
+      sum += bmp.readAltitude(1013.25);
+      delay(100);
+    }
+    startAltitude = sum / nSamples;
+    millisStart = millis();
+    Serial.print("🏁 Start-Höhe: ");
+    Serial.println(startAltitude);
+  }
+
+  // --- SD-Karte ---
+  SPI.begin(SD_SCK, SD_MISO, SD_MOSI, SD_CS);
+  sd_ok = checkSDStatus(); // initial prüfen
+  // Ensure current flight file exists if SD present
+  if (sd_ok) {
+    if (!SD.exists(currentFlightFile)) {
+      File f = SD.open(currentFlightFile, FILE_WRITE);
+      if (f) f.close();
+    }
+  }
+
+  // --- Preferences ---
+  preferences.begin("rocket", false);
+  fallTolerance = preferences.getFloat("fallTol", 2.0);
+  Serial.print("🌡️ Geladene Fallhöhe: ");
+  Serial.println(fallTolerance);
+
+  // --- WiFi ---
+  WiFi.softAP(ap_ssid, ap_password);
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("📡 Access Point gestartet: ");
+  Serial.println(IP);
+  statusWiFi = true;
+
+  // --- Server ---
+  server.on("/", []() { server.send(200, "text/html", getPage()); });
+
+  server.on("/data", []() {
+    bool sdSaving = sd_ok && sdLoggingEnabled;
+    String json = "{\"alt\":" + String(smoothedAltitude) +
+                  ",\"max\":" + String(maxAltitudeSend) +
+                  ",\"t\":" + String(millis() - millisStart) +
+                  ",\"parachute\":" + String(parachuteDeployed ? "true" : "false") +
+                  ",\"event\":\"" + lastEvent + "\"" +
+                  ",\"statusBMP\":" + String(statusBMP ? "true" : "false") +
+                  ",\"statusServo\":true" +
+                  ",\"statusWiFi\":" + String(statusWiFi ? "true" : "false") +
+                  ",\"statusSD\":" + String(sd_ok ? "true" : "false") +
+                  ",\"sdSaving\":" + String(sdSaving ? "true" : "false") +
+                  "}";
+    server.send(200, "application/json", json);
+    lastEvent = "";
+  });
+
+  server.on("/deploy", []() {
+    servo.write(180);
+    parachuteDeployed = true;
+    deployTime = millis();
+    lastEvent = "🪂 Fallschirm manuell ausgelöst!";
+    Serial.println(lastEvent);
+    logData("DEPLOY,," + String(millis() / 1000.0) + ",Fallschirm manuell ausgelöst");
+    server.send(200, "text/plain", "Fallschirm manuell ausgelöst!");
+  });
+
+  server.on("/reset", []() {
+    resetAll();
+    parachuteDeployed = false;
+    servo.write(0);
+    server.send(200, "text/plain", "Alles zurückgesetzt!");
+  });
+
+  server.on("/setFall", []() {
+    if (server.hasArg("value")) {
+      fallTolerance = server.arg("value").toFloat();
+      preferences.putFloat("fallTol", fallTolerance);
+      lastEvent = "💾 Fallhöhe gespeichert: " + String(fallTolerance);
+      Serial.println(lastEvent);
+      logData("SET_FALL,," + String(millis() / 1000.0) + ",Fallhöhe gespeichert");
+      server.send(200, "text/plain", "Fallhöhe gespeichert!");
+    }
+  });
+
+  server.on("/setGround", []() {
+    setGroundLevel();
+    server.send(200, "text/plain", "Ground-Level neu gesetzt!");
+  });
+
+  server.on("/newFlight", []() {
+    flightNumber++;
+    currentFlightFile = "/flight" + String(flightNumber) + ".csv";
+    maxAltitudeSend = 0;
+    maxAltitude = -1000;
+    historyIndex = 0;
+    historyFull = false;
+    movingIndex = 0;
+    movingFull = false;
+    for(int i=0;i<filterSize;i++) altitudeHistory[i]=0;
+    for(int i=0;i<movingAverageSize;i++) movingBuffer[i]=0;
+    lastEvent = "✈️ Neuer Flug gestartet: Flug " + String(flightNumber);
+    Serial.println(lastEvent);
+    logData("NEW_FLIGHT,," + String(millis()/1000.0) + ",Neuer Flug gestartet");
+    // create file on SD if available
+    if (sd_ok) {
+      if (!SD.exists(currentFlightFile)) {
+        File f = SD.open(currentFlightFile, FILE_WRITE);
+        if (f) f.close();
+      }
+    }
+    server.send(200, "text/plain", "Neuer Flug gestartet!");
+  });
+
+  server.on("/toggleSD", [](){
+    sdLoggingEnabled = !sdLoggingEnabled;
+    lastEvent = sdLoggingEnabled ? "💾 SD-Logging aktiviert" : "❌ SD-Logging deaktiviert";
+    Serial.println(lastEvent);
+    logData("TOGGLE_SD,," + String(millis() / 1000.0) + "," + lastEvent);
+    server.send(200, "text/plain", lastEvent);
+  });
+
+// SD-Dateien Seite im modernen, aufgeräumten Stil mit Rohliteral-String
+server.on("/download", []() {
+File root = SD.open("/");
+String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset='UTF-8'>
+<meta name='viewport' content='width=device-width, initial-scale=1.0'>
+<title>SD-Daten</title>
+<style>
+body{font-family:Inter, sans-serif;background:#0d1117;color:#eaeaea;margin:0;padding:20px;}
+
+
+h1{text-align:center;margin-bottom:20px;color:#4ade80;font-weight:600;}
+
+
+table{border-collapse:collapse;width:100%;margin-top:15px;}
+th, td{border:1px solid #2a2a2c;padding:8px;text-align:center;}
+th{background:#3b82f6;color:#fff;}
+select, button{padding:8px 12px;margin:5px;border:none;border-radius:8px;cursor:pointer;}
+.btn-blue{background:#3b82f6;color:#fff;}
+.btn-blue:hover{opacity:0.9;}
+a{color:#22c55e;text-decoration:none;}
+a:hover{text-decoration:underline;}
+</style>
+</head>
+<body>
+<div style='max-width:900px;margin:0 auto;'>
+<h1>SD-Logdateien</h1>
+<form method='GET' action='/downloadFile'>
+<label for='fileSelect'>Datei auswählen:</label>
+<select id='fileSelect' name='file'>
+)rawliteral";
+
+
+File entry = root.openNextFile();
+while(entry){
+String name = entry.name();
+if(!entry.isDirectory() && name.endsWith(".csv")){
+String filePath = name;
+if (!filePath.startsWith("/")) filePath = "/" + filePath;
+html += "<option value='" + filePath + "'>" + name + "</option>";
+}
+entry.close();
+entry = root.openNextFile();
+}
+
+
+html += R"rawliteral(
+</select>
+<button class='btn-blue' type='submit'>Anzeigen</button>
+</form>
+<br><a href='/'>⬅ Zurück zum Dashboard</a>
+</div>
+</body>
+</html>
+)rawliteral";
+
+
+server.send(200, "text/html", html);
+});
+
+
+// ==============================
+// Einzelne Datei anzeigen + Diagramm aus CSV
+// ==============================
+server.on("/downloadFile", []() {
+  if (!server.hasArg("file")) {
+    server.send(400, "text/plain", "❌ Keine Datei ausgewählt!");
+    return;
+  }
+
+  String filename = server.arg("file");
+  if (!filename.startsWith("/")) filename = "/" + filename;
+
+  if (!SD.exists(filename)) {
+    server.send(404, "text/plain", "❌ Datei nicht gefunden!");
+    return;
+  }
+
+  File file = SD.open(filename, FILE_READ);
+  if (!file) {
+    server.send(500, "text/plain", "❌ Datei konnte nicht geöffnet werden!");
+    return;
+  }
+
+  String html = R"rawliteral(
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SD-Daten</title>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+<style>
+body{font-family:Inter, sans-serif;background:#0d1117;color:#eaeaea;margin:0;padding:20px;}
+h1{text-align:center;margin-bottom:20px;color:#4ade80;font-weight:600;}
+table{border-collapse:collapse;width:100%;margin-top:20px;}
+th, td{border:1px solid #2a2a2c;padding:8px;text-align:center;}
+th{background:#3b82f6;color:#fff;}
+a{color:#22c55e;text-decoration:none;}
+a:hover{text-decoration:underline;}
+canvas{max-width:900px;margin:30px auto;display:block;}
+button{padding:10px 16px;border:none;border-radius:8px;background:#3b82f6;color:#fff;cursor:pointer;}
+button:hover{opacity:0.9;}
+</style>
+</head>
+<body>
+
+<div style="max-width:1000px;margin:0 auto;">
+<h1>Daten von: )rawliteral" + filename + R"rawliteral(</h1>
+
+<table>
+<tr>
+  <th>Typ</th>
+  <th>Wert</th>
+  <th>Zeit (s)</th>
+  <th>Bemerkung</th>
+</tr>
+)rawliteral";
+
+  // 🔹 Diagramm-Daten
+  String chartLabels = "";
+  String chartData   = "";
+
+  while (file.available()) {
+    String line = file.readStringUntil('\n');
+    line.trim();
+    if (line.length() == 0) continue;
+
+    int c1 = line.indexOf(',');
+    int c2 = line.indexOf(',', c1 + 1);
+    int c3 = line.indexOf(',', c2 + 1);
+
+    String col1 = c1 >= 0 ? line.substring(0, c1) : "";
+    String col2 = (c1 >= 0 && c2 > c1) ? line.substring(c1 + 1, c2) : "";
+    String col3 = (c2 >= 0 && c3 > c2) ? line.substring(c2 + 1, c3) : "";
+    String col4 = (c3 >= 0) ? line.substring(c3 + 1) : "";
+
+    // Tabelle
+    html += "<tr><td>" + col1 + "</td><td>" + col2 + "</td><td>" + col3 + "</td><td>" + col4 + "</td></tr>";
+
+    // 🔹 Nur Höhenwerte ins Diagramm
+    if (col1 == "DATA") {
+      chartLabels += col3 + ",";
+      chartData   += col2 + ",";
+    }
+  }
+
+  file.close();
+
+  html += R"rawliteral(
+</table>
+
+<canvas id="sdChart"></canvas>
+
+<div style="text-align:center;margin-top:10px;">
+  <button onclick="downloadChart()">📊 Diagramm als PNG herunterladen</button>
+</div>
+
+<br>
+<a href="/download">⬅ Zurück zur Dateiauswahl</a><br>
+<a href="/">⬅ Zurück zum Dashboard</a>
+</div>
+
+<script>
+const labels = [)rawliteral" + chartLabels + R"rawliteral(];
+const values = [)rawliteral" + chartData + R"rawliteral(];
+
+const ctx = document.getElementById('sdChart').getContext('2d');
+const sdChart = new Chart(ctx, {
+  type: 'line',
+  data: {
+    labels: labels,
+    datasets: [{
+      label: 'Höhe (m)',
+      data: values,
+      borderColor: 'cyan',
+      backgroundColor: 'rgba(0,255,255,0.15)',
+      fill: true,
+      tension: 0.3,
+      pointRadius: 0
+    }]
+  },
+  options: {
+    scales: {
+      x: { title: { display: true, text: 'Zeit (s)' } },
+      y: { title: { display: true, text: 'Höhe (m)' } }
+    }
+  }
+});
+
+function downloadChart(){
+  const a = document.createElement('a');
+  a.href = sdChart.toBase64Image();
+  a.download = 'sd_diagramm.png';
+  a.click();
+}
+</script>
+
+</body>
+</html>
+)rawliteral";
+
+  server.send(200, "text/html", html);
+});
+
+// ==============================
+// Server starten
+// ==============================
+server.begin();
+Serial.println("🌍 Webserver gestartet!");
+}
+
+// ==============================
+// LOOP
+// ==============================
+void loop() {
+  server.handleClient();
+
+  // LED blinkt bei OK
+  if (sensor_ok && statusWiFi) {
+    if (millis() - lastBlink >= blinkInterval) {
+      lastBlink = millis();
+      ledState = !ledState;
+      digitalWrite(LED_PIN, ledState ? HIGH : LOW);
+    }
+  } else {
+    digitalWrite(LED_PIN, LOW);
+  }
+
+  if (!sensor_ok) return;
+
+  currentAltitude = bmp.readAltitude(1013.25);
+  Serial.print("Höhe roh: ");
+  Serial.print(currentAltitude);
+  Serial.print(" m | geglättet: ");
+  Serial.println(smoothedAltitude);
+
+  displayAltitude = currentAltitude - startAltitude - groundOffset;
+  smoothedAltitude = getSmoothedAltitude(displayAltitude);
+  if (smoothedAltitude > maxAltitudeSend) maxAltitudeSend = smoothedAltitude;
+
+  altitudeHistory[historyIndex] = displayAltitude;
+  historyIndex = (historyIndex + 1) % filterSize;
+  if (historyIndex == 0) historyFull = true;
+
+  // SD-Logging
+  logData("DATA," + String(smoothedAltitude, 2) + "," + String(millis() / 1000.0) + ",");
+
+  // Fallschirm-Logik
+  if (!parachuteDeployed) {
+    if (isStrictlyIncreasing() && displayAltitude > maxAltitude) {
+      maxAltitude = displayAltitude;
+    } else if (maxAltitude - displayAltitude >= fallTolerance) {
+      servo.write(180);
+      parachuteDeployed = true;
+      deployTime = millis();
+      lastEvent = "🪂 Fallschirm automatisch ausgelöst!";
+    }
+  } else {
+    if (millis() - deployTime >= zurueck) {
+      servo.write(0);
+      parachuteDeployed = false;
+      maxAltitude = -1000;
+    }
+  }
+
+  delay(100);
+}
