@@ -74,6 +74,7 @@ float riseTolerance = 1.0;
 float currentAltitude = 0;
 float displayAltitude = 0;
 float smoothedAltitude = 0;
+float currentTemperature = 0;
 float maxAltitudeSend = 0;
 unsigned long millisStart = 0;
 bool measuring = false;
@@ -104,12 +105,14 @@ void logData(String data) {
 // --- SD-Status prüfen (dynamisch) ---
 bool checkSDStatus() {
   if (sd_ok) {
-    // Falls Datei nicht mehr existiert -> Karte entfernt
-    if (!SD.exists(currentFlightFile)) {
+    File root = SD.open("/");
+    if (!root) {
       sd_ok = false;
       lastEvent = "❌ SD-Karte entfernt!";
       Serial.println(lastEvent);
       logData("STATUS,SD," + String(millis() / 1000.0) + ",SD-Karte entfernt");
+    } else {
+      root.close();
     }
   } else {
     if (SD.begin(SD_CS)) {
@@ -145,6 +148,22 @@ float getSmoothedAltitude(float newVal) {
   float sum = 0;
   for (int i = 0; i < n; i++) sum += movingBuffer[i];
   return sum / n;
+}
+
+
+String escapeJson(const String &input) {
+  String out = "";
+  out.reserve(input.length() + 8);
+  for (size_t i = 0; i < input.length(); i++) {
+    char c = input[i];
+    if (c == '\\') out += "\\\\";
+    else if (c == '"') out += "\\\"";
+    else if (c == '\n') out += "\\n";
+    else if (c == '\r') out += "\\r";
+    else if (c == '\t') out += "\\t";
+    else out += c;
+  }
+  return out;
 }
 
 void resetAll() {
@@ -195,7 +214,7 @@ if (currentBMP != lastStatusBMP) {
   }
 
   // --- WiFi ---
-  bool currentWiFi = WiFi.softAPgetStationNum() >= 0;
+  bool currentWiFi = WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA;
   if (currentWiFi != lastStatusWiFi) {
     statusWiFi = currentWiFi;
     lastEvent = currentWiFi ? "📡 WLAN verbunden!" : "❌ WLAN getrennt!";
@@ -231,7 +250,7 @@ String getPage() {
           ".btn-disabled{background:#555 !important;cursor:not-allowed;opacity:0.6;}"
           ".log-container{display:flex;gap:15px;flex-wrap:wrap;margin-top:20px;}"
           ".log-box{background:#141416;color:#eaeaea;padding:12px;overflow-y:auto;border-radius:10px;flex:1;height:260px;font-family:monospace;font-size:14px;}"
-          "#chart{width:96%;max-width:750px;height:300px;margin:20px auto;display:none;border:1px solid #2a2a2c;border-radius:12px;background:#0f0f12;}"
+          "#chart{width:96%;max-width:750px;height:300px;margin:20px auto;display:block;border:1px solid #2a2a2c;border-radius:12px;background:#0f0f12;}"
           ".sd-status{margin-top:18px;font-size:16px;display:flex;align-items:center;justify-content:center;gap:12px;}"
           ".led{width:18px;height:18px;border-radius:50%;display:inline-block;box-shadow:0 0 10px rgba(0,0,0,0.5);}"
           ".led.green{background:#4ade80;animation:blink 2s infinite;}"
@@ -249,7 +268,9 @@ String getPage() {
 
   html += "<div class='value-box'><strong>Flug:</strong> <span id='currentFlight'>" + String(flightNumber) + "</span></div>";
   html += "<div class='value-box'>Höhe: <span id='alt'>0</span> m</div>";
+  html += "<div class='value-box'>Temperatur: <span id='temp'>0</span> °C</div>";
   html += "<div class='value-box'>Peak: <span id='max'>0</span> m</div>";
+  html += "<div class='value-box'>Höchster Messwert: <span id='peakValueLabel'>0.00</span> m (bei <span id='peakTimeLabel'>0</span> s)</div>";
 
   // Fallhöhe
   html += "<div class='value-box'>Auslösdifferenz: <input type='number' id='fallInput' value='" + String(fallTolerance,1) + "' step='0.1'> <button class='btn btn-green' onclick='setFall()'>💾</button></div>";
@@ -297,43 +318,126 @@ html += "<button class='btn btn-orange' id='autoScrollBtn' onclick='toggleAutoSc
   // JavaScript für Chart mit Peak Marker
   html += R"rawliteral(
 <script>
-let ctx = document.getElementById('chart').getContext('2d');
+let canvas = document.getElementById('chart');
+let ctx = canvas.getContext('2d');
 let peakValue = 0;
-let chart = new Chart(ctx, {
-    type: 'line',
-    data: {
-        labels: [],
-        datasets: [{
-            label: 'Höhe (m)',
-            data: [],
-            borderColor: 'cyan',
-            backgroundColor: 'rgba(0, 255, 255, 0.1)',
-            fill: true,
-            tension: 0.3,
-            pointRadius: 3,
-            pointBackgroundColor: function(context){
-                let value = context.raw;
-                return value === peakValue ? 'yellow' : 'cyan';
-            }
-        }]
-    },
-    options: {
-        scales: {
-            x: { title: { display: true, text: 'Zeit (s)' } },
-            y: { title: { display: true, text: 'Höhe (m)' } }
+let peakTime = 0;
+let chart = null;
+
+function createFallbackChart(canvas, ctx) {
+    const fallback = {
+        data: { labels: [], datasets: [{ data: [] }] },
+        update: function() {
+            const labels = this.data.labels;
+            const values = this.data.datasets[0].data.map(v => Number(v));
+            const cssWidth = canvas.clientWidth || 750;
+            const cssHeight = canvas.clientHeight || 300;
+            if (canvas.width !== cssWidth) canvas.width = cssWidth;
+            if (canvas.height !== cssHeight) canvas.height = cssHeight;
+            const w = canvas.width;
+            const h = canvas.height;
+            ctx.clearRect(0, 0, w, h);
+            ctx.fillStyle = '#0f0f12';
+            ctx.fillRect(0, 0, w, h);
+
+            if (values.length < 2) return;
+
+            const minV = Math.min(...values);
+            const maxV = Math.max(...values);
+            const range = Math.max(1, maxV - minV);
+            const pad = 24;
+            const innerW = w - pad * 2;
+            const innerH = h - pad * 2;
+
+            ctx.strokeStyle = '#2a2a2c';
+            ctx.lineWidth = 1;
+            ctx.strokeRect(pad, pad, innerW, innerH);
+
+            ctx.beginPath();
+            values.forEach((v, i) => {
+                const x = pad + (i / Math.max(1, values.length - 1)) * innerW;
+                const y = pad + innerH - ((v - minV) / range) * innerH;
+                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
+            });
+            ctx.strokeStyle = 'cyan';
+            ctx.lineWidth = 2;
+            ctx.stroke();
+
+            // Peak markieren
+            const peak = Math.max(...values);
+            const peakIdx = values.indexOf(peak);
+            const peakX = pad + (peakIdx / Math.max(1, values.length - 1)) * innerW;
+            const peakY = pad + innerH - ((peak - minV) / range) * innerH;
+            ctx.beginPath();
+            ctx.arc(peakX, peakY, 5, 0, Math.PI * 2);
+            ctx.fillStyle = 'yellow';
+            ctx.fill();
+            ctx.fillStyle = '#eaeaea';
+            ctx.font = '12px sans-serif';
+            ctx.fillText(peak.toFixed(2) + ' m', Math.min(w - 90, peakX + 8), Math.max(14, peakY - 8));
+
+            // Achsenbeschriftung
+            ctx.fillStyle = '#eaeaea';
+            ctx.font = '12px sans-serif';
+            ctx.fillText('Zeit (s)', w / 2 - 22, h - 4);
+            ctx.save();
+            ctx.translate(10, h / 2 + 20);
+            ctx.rotate(-Math.PI / 2);
+            ctx.fillText('Höhe (m)', 0, 0);
+            ctx.restore();
         },
-        plugins: { legend: { display: false } }
-    }
-});
+        toBase64Image: function() {
+            return canvas.toDataURL('image/png');
+        }
+    };
+    return fallback;
+}
+
+if (typeof Chart !== 'undefined') {
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Höhe (m)',
+                data: [],
+                borderColor: 'cyan',
+                backgroundColor: 'rgba(0, 255, 255, 0.1)',
+                fill: true,
+                tension: 0.3,
+                pointBackgroundColor: function(context){
+                    let value = Number(context.raw);
+                    return value === peakValue ? 'yellow' : 'cyan';
+                },
+                pointRadius: function(context){
+                    let value = Number(context.raw);
+                    return value === peakValue ? 6 : 3;
+                }
+            }]
+        },
+        options: {
+            scales: {
+                x: { title: { display: true, text: 'Zeit (s)' } },
+                y: { title: { display: true, text: 'Höhe (m)' } }
+            },
+            plugins: { legend: { display: false } }
+        }
+    });
+} else {
+    console.warn('Chart.js konnte nicht geladen werden; nutze Fallback-Diagramm.');
+    chart = createFallbackChart(canvas, ctx);
+}
 
 let measuring = false;
 let autoScroll = true;
 let flightNumber = 1;
+document.getElementById('peakValueLabel').innerText = '0.00';
+document.getElementById('peakTimeLabel').innerText = '0';
 
 function toggleMeasurement(){
     measuring = !measuring;
     document.getElementById('startStopBtn').innerText = measuring ? '⏸ Stop' : '▶ Start';
-    if(measuring) document.getElementById('chart').style.display='block';
+    if(measuring && chart) document.getElementById('chart').style.display='block';
 }
 
 function toggleAutoScroll(){
@@ -343,6 +447,7 @@ function toggleAutoScroll(){
 
 function downloadChart(){
     const link = document.createElement('a');
+    if(!chart) return;
     link.href = chart.toBase64Image();
     link.download = 'flug_' + flightNumber + '_diagramm.png';
     link.click();
@@ -355,16 +460,22 @@ async function fetchData(){
         if(!res.ok) return;
         let d = await res.json();
         document.getElementById('alt').innerText = d.alt.toFixed(2);
+        document.getElementById('temp').innerText = d.temp.toFixed(2);
         document.getElementById('max').innerText = d.max.toFixed(2);
         let logBox = document.getElementById('logBox');
         let eventBox = document.getElementById('eventBox');
         logBox.innerHTML += '[' + Math.round(d.t/1000) + 's] Höhe: ' + d.alt.toFixed(2) + ' m<br>';
         if(d.event && d.event.length>0) eventBox.innerHTML += '[' + Math.round(d.t/1000) + 's] ' + d.event + '<br>';
         if(autoScroll){ logBox.scrollTop=logBox.scrollHeight; eventBox.scrollTop=eventBox.scrollHeight; }
-        if(measuring){
-            if(d.alt > peakValue) peakValue = d.alt;
+        if(measuring && chart){
+            if(d.alt > peakValue){
+                peakValue = Number(d.alt.toFixed(2));
+                peakTime = Math.round(d.t/1000);
+            }
+            document.getElementById('peakValueLabel').innerText = peakValue.toFixed(2);
+            document.getElementById('peakTimeLabel').innerText = peakTime;
             chart.data.labels.push(Math.round(d.t/1000));
-            chart.data.datasets[0].data.push(d.alt.toFixed(2));
+            chart.data.datasets[0].data.push(Number(d.alt.toFixed(2)));
             if(chart.data.labels.length>100){ chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
             chart.update();
         }
@@ -378,12 +489,13 @@ async function fetchData(){
         else{ sdLed.classList.remove('green'); sdLed.classList.add('red'); sdText.innerText = '🔴 Speichert nicht'; }
     } catch(e){ console.error(e); }
 }
+fetchData();
 setInterval(fetchData,1000);
 function deployParachute(){fetch('/deploy');}
-function resetAll(){fetch('/reset'); document.getElementById('logBox').innerHTML=''; document.getElementById('eventBox').innerHTML=''; chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update();}
+function resetAll(){fetch('/reset'); document.getElementById('logBox').innerHTML=''; document.getElementById('eventBox').innerHTML=''; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; peakTime=0; document.getElementById('peakValueLabel').innerText='0.00'; document.getElementById('peakTimeLabel').innerText='0'; chart.update(); }}
 function setFall(){let val=document.getElementById('fallInput').value;fetch('/setFall?value='+val);}
 function setGround(){fetch('/setGround');}
-function newFlight(){fetch('/newFlight').then(()=>{ flightNumber++; document.getElementById('currentFlight').innerText='Flug '+flightNumber; chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update(); });}
+function newFlight(){fetch('/newFlight').then(()=>{ flightNumber++; document.getElementById('currentFlight').innerText='Flug '+flightNumber; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; peakTime=0; document.getElementById('peakValueLabel').innerText='0.00'; document.getElementById('peakTimeLabel').innerText='0'; chart.update(); } });}
 function toggleSD(){fetch('/toggleSD');}
 </script>
 )rawliteral";
@@ -445,11 +557,17 @@ void setup() {
   Serial.println(fallTolerance);
 
   // --- WiFi ---
-  WiFi.softAP(ap_ssid, ap_password);
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
+  bool apStarted = WiFi.softAP(ap_ssid, ap_password, 1, false, 8);
   IPAddress IP = WiFi.softAPIP();
   Serial.print("📡 Access Point gestartet: ");
   Serial.println(IP);
-  statusWiFi = true;
+  statusWiFi = apStarted;
+  if (!apStarted) {
+    lastEvent = "❌ WLAN AP Start fehlgeschlagen!";
+    Serial.println(lastEvent);
+  }
 
   // --- Server ---
   server.on("/", []() { server.send(200, "text/html", getPage()); });
@@ -458,9 +576,10 @@ void setup() {
     bool sdSaving = sd_ok && sdLoggingEnabled;
     String json = "{\"alt\":" + String(smoothedAltitude) +
                   ",\"max\":" + String(maxAltitudeSend) +
+                  ",\"temp\":" + String(currentTemperature) +
                   ",\"t\":" + String(millis() - millisStart) +
                   ",\"parachute\":" + String(parachuteDeployed ? "true" : "false") +
-                  ",\"event\":\"" + lastEvent + "\"" +
+                  ",\"event\":\"" + escapeJson(lastEvent) + "\"" +
                   ",\"statusBMP\":" + String(statusBMP ? "true" : "false") +
                   ",\"statusServo\":true" +
                   ",\"statusWiFi\":" + String(statusWiFi ? "true" : "false") +
@@ -759,6 +878,12 @@ Serial.println("🌍 Webserver gestartet!");
 void loop() {
   server.handleClient();
 
+  static unsigned long lastStatusCheck = 0;
+  if (millis() - lastStatusCheck >= 1000) {
+    lastStatusCheck = millis();
+    checkComponentStatus();
+  }
+
   // LED blinkt bei OK
   if (sensor_ok && statusWiFi) {
     if (millis() - lastBlink >= blinkInterval) {
@@ -773,13 +898,17 @@ void loop() {
   if (!sensor_ok) return;
 
   currentAltitude = bmp.readAltitude(1013.25);
+  currentTemperature = bmp.readTemperature();
+  displayAltitude = currentAltitude - startAltitude - groundOffset;
+  smoothedAltitude = getSmoothedAltitude(displayAltitude);
+
   Serial.print("Höhe roh: ");
   Serial.print(currentAltitude);
   Serial.print(" m | geglättet: ");
-  Serial.println(smoothedAltitude);
-
-  displayAltitude = currentAltitude - startAltitude - groundOffset;
-  smoothedAltitude = getSmoothedAltitude(displayAltitude);
+  Serial.print(smoothedAltitude);
+  Serial.print(" | Temp: ");
+  Serial.print(currentTemperature);
+  Serial.println(" C");
   if (smoothedAltitude > maxAltitudeSend) maxAltitudeSend = smoothedAltitude;
 
   altitudeHistory[historyIndex] = displayAltitude;
@@ -798,6 +927,8 @@ void loop() {
       parachuteDeployed = true;
       deployTime = millis();
       lastEvent = "🪂 Fallschirm automatisch ausgelöst!";
+      Serial.println(lastEvent);
+      logData("DEPLOY_AUTO,," + String(millis() / 1000.0) + ",Fallschirm automatisch ausgelöst");
     }
   } else {
     if (millis() - deployTime >= zurueck) {
