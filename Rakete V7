@@ -413,6 +413,27 @@ if (typeof Chart !== 'undefined') {
                 }
             }]
         },
+let chart = null;
+
+if (typeof Chart !== 'undefined') {
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Höhe (m)',
+                data: [],
+                borderColor: 'cyan',
+                backgroundColor: 'rgba(0, 255, 255, 0.1)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+                pointBackgroundColor: function(context){
+                    let value = context.raw;
+                    return value === peakValue ? 'yellow' : 'cyan';
+                }
+            }]
+        },
         options: {
             scales: {
                 x: { title: { display: true, text: 'Zeit (s)' } },
@@ -424,6 +445,9 @@ if (typeof Chart !== 'undefined') {
 } else {
     console.warn('Chart.js konnte nicht geladen werden; nutze Fallback-Diagramm.');
     chart = createFallbackChart(canvas, ctx);
+    console.warn('Chart.js konnte nicht geladen werden; Diagramm ist deaktiviert.');
+    let chartEl = document.getElementById('chart');
+    if (chartEl) chartEl.style.display = 'none';
 }
 
 let measuring = false;
@@ -471,6 +495,15 @@ async function fetchData(){
             }
             document.getElementById('peakValueLabel').innerText = peakValue.toFixed(2);
             document.getElementById('peakTimeLabel').innerText = peakTime;
+        if(d.alt > peakValue){
+            peakValue = Number(d.alt.toFixed(2));
+            peakTime = Math.round(d.t/1000);
+        }
+        document.getElementById('peakValueLabel').innerText = peakValue.toFixed(2);
+        document.getElementById('peakTimeLabel').innerText = peakTime;
+        if(chart){
+        if(measuring && chart){
+            if(d.alt > peakValue) peakValue = d.alt;
             chart.data.labels.push(Math.round(d.t/1000));
             chart.data.datasets[0].data.push(Number(d.alt.toFixed(2)));
             if(chart.data.labels.length>100){ chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
@@ -493,6 +526,10 @@ function resetAll(){fetch('/reset'); document.getElementById('logBox').innerHTML
 function setFall(){let val=document.getElementById('fallInput').value;fetch('/setFall?value='+val);}
 function setGround(){fetch('/setGround');}
 function newFlight(){fetch('/newFlight').then(()=>{ flightNumber++; document.getElementById('currentFlight').innerText='Flug '+flightNumber; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; peakTime=0; document.getElementById('peakValueLabel').innerText='0.00'; document.getElementById('peakTimeLabel').innerText='0'; chart.update(); } });}
+function resetAll(){fetch('/reset'); document.getElementById('logBox').innerHTML=''; document.getElementById('eventBox').innerHTML=''; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update(); }}
+function setFall(){let val=document.getElementById('fallInput').value;fetch('/setFall?value='+val);}
+function setGround(){fetch('/setGround');}
+function newFlight(){fetch('/newFlight').then(()=>{ flightNumber++; document.getElementById('currentFlight').innerText='Flug '+flightNumber; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update(); } });}
 function toggleSD(){fetch('/toggleSD');}
 </script>
 )rawliteral";
