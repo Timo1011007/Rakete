@@ -104,12 +104,14 @@ void logData(String data) {
 // --- SD-Status prüfen (dynamisch) ---
 bool checkSDStatus() {
   if (sd_ok) {
-    // Falls Datei nicht mehr existiert -> Karte entfernt
-    if (!SD.exists(currentFlightFile)) {
+    File root = SD.open("/");
+    if (!root) {
       sd_ok = false;
       lastEvent = "❌ SD-Karte entfernt!";
       Serial.println(lastEvent);
       logData("STATUS,SD," + String(millis() / 1000.0) + ",SD-Karte entfernt");
+    } else {
+      root.close();
     }
   } else {
     if (SD.begin(SD_CS)) {
@@ -145,6 +147,22 @@ float getSmoothedAltitude(float newVal) {
   float sum = 0;
   for (int i = 0; i < n; i++) sum += movingBuffer[i];
   return sum / n;
+}
+
+
+String escapeJson(const String &input) {
+  String out = "";
+  out.reserve(input.length() + 8);
+  for (size_t i = 0; i < input.length(); i++) {
+    char c = input[i];
+    if (c == '\\') out += "\\\\";
+    else if (c == '"') out += "\\\"";
+    else if (c == '\n') out += "\\n";
+    else if (c == '\r') out += "\\r";
+    else if (c == '\t') out += "\\t";
+    else out += c;
+  }
+  return out;
 }
 
 void resetAll() {
@@ -195,7 +213,7 @@ if (currentBMP != lastStatusBMP) {
   }
 
   // --- WiFi ---
-  bool currentWiFi = WiFi.softAPgetStationNum() >= 0;
+  bool currentWiFi = WiFi.softAPgetStationNum() > 0;
   if (currentWiFi != lastStatusWiFi) {
     statusWiFi = currentWiFi;
     lastEvent = currentWiFi ? "📡 WLAN verbunden!" : "❌ WLAN getrennt!";
@@ -299,32 +317,40 @@ html += "<button class='btn btn-orange' id='autoScrollBtn' onclick='toggleAutoSc
 <script>
 let ctx = document.getElementById('chart').getContext('2d');
 let peakValue = 0;
-let chart = new Chart(ctx, {
-    type: 'line',
-    data: {
-        labels: [],
-        datasets: [{
-            label: 'Höhe (m)',
-            data: [],
-            borderColor: 'cyan',
-            backgroundColor: 'rgba(0, 255, 255, 0.1)',
-            fill: true,
-            tension: 0.3,
-            pointRadius: 3,
-            pointBackgroundColor: function(context){
-                let value = context.raw;
-                return value === peakValue ? 'yellow' : 'cyan';
-            }
-        }]
-    },
-    options: {
-        scales: {
-            x: { title: { display: true, text: 'Zeit (s)' } },
-            y: { title: { display: true, text: 'Höhe (m)' } }
+let chart = null;
+
+if (typeof Chart !== 'undefined') {
+    chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: [],
+            datasets: [{
+                label: 'Höhe (m)',
+                data: [],
+                borderColor: 'cyan',
+                backgroundColor: 'rgba(0, 255, 255, 0.1)',
+                fill: true,
+                tension: 0.3,
+                pointRadius: 3,
+                pointBackgroundColor: function(context){
+                    let value = context.raw;
+                    return value === peakValue ? 'yellow' : 'cyan';
+                }
+            }]
         },
-        plugins: { legend: { display: false } }
-    }
-});
+        options: {
+            scales: {
+                x: { title: { display: true, text: 'Zeit (s)' } },
+                y: { title: { display: true, text: 'Höhe (m)' } }
+            },
+            plugins: { legend: { display: false } }
+        }
+    });
+} else {
+    console.warn('Chart.js konnte nicht geladen werden; Diagramm ist deaktiviert.');
+    let chartEl = document.getElementById('chart');
+    if (chartEl) chartEl.style.display = 'none';
+}
 
 let measuring = false;
 let autoScroll = true;
@@ -333,7 +359,7 @@ let flightNumber = 1;
 function toggleMeasurement(){
     measuring = !measuring;
     document.getElementById('startStopBtn').innerText = measuring ? '⏸ Stop' : '▶ Start';
-    if(measuring) document.getElementById('chart').style.display='block';
+    if(measuring && chart) document.getElementById('chart').style.display='block';
 }
 
 function toggleAutoScroll(){
@@ -343,6 +369,7 @@ function toggleAutoScroll(){
 
 function downloadChart(){
     const link = document.createElement('a');
+    if(!chart) return;
     link.href = chart.toBase64Image();
     link.download = 'flug_' + flightNumber + '_diagramm.png';
     link.click();
@@ -361,7 +388,7 @@ async function fetchData(){
         logBox.innerHTML += '[' + Math.round(d.t/1000) + 's] Höhe: ' + d.alt.toFixed(2) + ' m<br>';
         if(d.event && d.event.length>0) eventBox.innerHTML += '[' + Math.round(d.t/1000) + 's] ' + d.event + '<br>';
         if(autoScroll){ logBox.scrollTop=logBox.scrollHeight; eventBox.scrollTop=eventBox.scrollHeight; }
-        if(measuring){
+        if(measuring && chart){
             if(d.alt > peakValue) peakValue = d.alt;
             chart.data.labels.push(Math.round(d.t/1000));
             chart.data.datasets[0].data.push(d.alt.toFixed(2));
@@ -380,10 +407,10 @@ async function fetchData(){
 }
 setInterval(fetchData,1000);
 function deployParachute(){fetch('/deploy');}
-function resetAll(){fetch('/reset'); document.getElementById('logBox').innerHTML=''; document.getElementById('eventBox').innerHTML=''; chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update();}
+function resetAll(){fetch('/reset'); document.getElementById('logBox').innerHTML=''; document.getElementById('eventBox').innerHTML=''; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update(); }}
 function setFall(){let val=document.getElementById('fallInput').value;fetch('/setFall?value='+val);}
 function setGround(){fetch('/setGround');}
-function newFlight(){fetch('/newFlight').then(()=>{ flightNumber++; document.getElementById('currentFlight').innerText='Flug '+flightNumber; chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update(); });}
+function newFlight(){fetch('/newFlight').then(()=>{ flightNumber++; document.getElementById('currentFlight').innerText='Flug '+flightNumber; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update(); } });}
 function toggleSD(){fetch('/toggleSD');}
 </script>
 )rawliteral";
@@ -460,7 +487,7 @@ void setup() {
                   ",\"max\":" + String(maxAltitudeSend) +
                   ",\"t\":" + String(millis() - millisStart) +
                   ",\"parachute\":" + String(parachuteDeployed ? "true" : "false") +
-                  ",\"event\":\"" + lastEvent + "\"" +
+                  ",\"event\":\"" + escapeJson(lastEvent) + "\"" +
                   ",\"statusBMP\":" + String(statusBMP ? "true" : "false") +
                   ",\"statusServo\":true" +
                   ",\"statusWiFi\":" + String(statusWiFi ? "true" : "false") +
@@ -773,13 +800,13 @@ void loop() {
   if (!sensor_ok) return;
 
   currentAltitude = bmp.readAltitude(1013.25);
+  displayAltitude = currentAltitude - startAltitude - groundOffset;
+  smoothedAltitude = getSmoothedAltitude(displayAltitude);
+
   Serial.print("Höhe roh: ");
   Serial.print(currentAltitude);
   Serial.print(" m | geglättet: ");
   Serial.println(smoothedAltitude);
-
-  displayAltitude = currentAltitude - startAltitude - groundOffset;
-  smoothedAltitude = getSmoothedAltitude(displayAltitude);
   if (smoothedAltitude > maxAltitudeSend) maxAltitudeSend = smoothedAltitude;
 
   altitudeHistory[historyIndex] = displayAltitude;
@@ -798,6 +825,8 @@ void loop() {
       parachuteDeployed = true;
       deployTime = millis();
       lastEvent = "🪂 Fallschirm automatisch ausgelöst!";
+      Serial.println(lastEvent);
+      logData("DEPLOY_AUTO,," + String(millis() / 1000.0) + ",Fallschirm automatisch ausgelöst");
     }
   } else {
     if (millis() - deployTime >= zurueck) {
