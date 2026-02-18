@@ -104,12 +104,14 @@ void logData(String data) {
 // --- SD-Status prüfen (dynamisch) ---
 bool checkSDStatus() {
   if (sd_ok) {
-    // Falls Datei nicht mehr existiert -> Karte entfernt
-    if (!SD.exists(currentFlightFile)) {
+    File root = SD.open("/");
+    if (!root) {
       sd_ok = false;
       lastEvent = "❌ SD-Karte entfernt!";
       Serial.println(lastEvent);
       logData("STATUS,SD," + String(millis() / 1000.0) + ",SD-Karte entfernt");
+    } else {
+      root.close();
     }
   } else {
     if (SD.begin(SD_CS)) {
@@ -145,6 +147,22 @@ float getSmoothedAltitude(float newVal) {
   float sum = 0;
   for (int i = 0; i < n; i++) sum += movingBuffer[i];
   return sum / n;
+}
+
+
+String escapeJson(const String &input) {
+  String out = "";
+  out.reserve(input.length() + 8);
+  for (size_t i = 0; i < input.length(); i++) {
+    char c = input[i];
+    if (c == '\\') out += "\\\\";
+    else if (c == '"') out += "\\\"";
+    else if (c == '\n') out += "\\n";
+    else if (c == '\r') out += "\\r";
+    else if (c == '\t') out += "\\t";
+    else out += c;
+  }
+  return out;
 }
 
 void resetAll() {
@@ -195,7 +213,7 @@ if (currentBMP != lastStatusBMP) {
   }
 
   // --- WiFi ---
-  bool currentWiFi = WiFi.softAPgetStationNum() >= 0;
+  bool currentWiFi = WiFi.softAPgetStationNum() > 0;
   if (currentWiFi != lastStatusWiFi) {
     statusWiFi = currentWiFi;
     lastEvent = currentWiFi ? "📡 WLAN verbunden!" : "❌ WLAN getrennt!";
@@ -460,7 +478,7 @@ void setup() {
                   ",\"max\":" + String(maxAltitudeSend) +
                   ",\"t\":" + String(millis() - millisStart) +
                   ",\"parachute\":" + String(parachuteDeployed ? "true" : "false") +
-                  ",\"event\":\"" + lastEvent + "\"" +
+                  ",\"event\":\"" + escapeJson(lastEvent) + "\"" +
                   ",\"statusBMP\":" + String(statusBMP ? "true" : "false") +
                   ",\"statusServo\":true" +
                   ",\"statusWiFi\":" + String(statusWiFi ? "true" : "false") +
@@ -773,13 +791,13 @@ void loop() {
   if (!sensor_ok) return;
 
   currentAltitude = bmp.readAltitude(1013.25);
+  displayAltitude = currentAltitude - startAltitude - groundOffset;
+  smoothedAltitude = getSmoothedAltitude(displayAltitude);
+
   Serial.print("Höhe roh: ");
   Serial.print(currentAltitude);
   Serial.print(" m | geglättet: ");
   Serial.println(smoothedAltitude);
-
-  displayAltitude = currentAltitude - startAltitude - groundOffset;
-  smoothedAltitude = getSmoothedAltitude(displayAltitude);
   if (smoothedAltitude > maxAltitudeSend) maxAltitudeSend = smoothedAltitude;
 
   altitudeHistory[historyIndex] = displayAltitude;
@@ -798,6 +816,8 @@ void loop() {
       parachuteDeployed = true;
       deployTime = millis();
       lastEvent = "🪂 Fallschirm automatisch ausgelöst!";
+      Serial.println(lastEvent);
+      logData("DEPLOY_AUTO,," + String(millis() / 1000.0) + ",Fallschirm automatisch ausgelöst");
     }
   } else {
     if (millis() - deployTime >= zurueck) {
