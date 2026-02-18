@@ -249,7 +249,7 @@ String getPage() {
           ".btn-disabled{background:#555 !important;cursor:not-allowed;opacity:0.6;}"
           ".log-container{display:flex;gap:15px;flex-wrap:wrap;margin-top:20px;}"
           ".log-box{background:#141416;color:#eaeaea;padding:12px;overflow-y:auto;border-radius:10px;flex:1;height:260px;font-family:monospace;font-size:14px;}"
-          "#chart{width:96%;max-width:750px;height:300px;margin:20px auto;display:none;border:1px solid #2a2a2c;border-radius:12px;background:#0f0f12;}"
+          "#chart{width:96%;max-width:750px;height:300px;margin:20px auto;display:block;border:1px solid #2a2a2c;border-radius:12px;background:#0f0f12;}"
           ".sd-status{margin-top:18px;font-size:16px;display:flex;align-items:center;justify-content:center;gap:12px;}"
           ".led{width:18px;height:18px;border-radius:50%;display:inline-block;box-shadow:0 0 10px rgba(0,0,0,0.5);}"
           ".led.green{background:#4ade80;animation:blink 2s infinite;}"
@@ -315,7 +315,8 @@ html += "<button class='btn btn-orange' id='autoScrollBtn' onclick='toggleAutoSc
   // JavaScript für Chart mit Peak Marker
   html += R"rawliteral(
 <script>
-let ctx = document.getElementById('chart').getContext('2d');
+let canvas = document.getElementById('chart');
+let ctx = canvas.getContext('2d');
 let peakValue = 0;
 let chart = null;
 
