@@ -280,30 +280,38 @@ String getPage() {
   html += "<meta name='viewport' content='width=device-width, initial-scale=1.0'>";
   html += "<title>Wasserrakete Dashboard</title>";
 
-  // CSS für professionelles Layout und Chart
+  // CSS für ein simples, aufgeräumtes Layout
   html += "<style>"
-          "body{font-family:Inter, sans-serif;background:#0d1117;color:#eaeaea;margin:0;padding:20px;}"
-          "h1{color:#4ade80;text-align:center;margin-bottom:25px;font-weight:600;}"
-          ".card{background:#16181f;padding:20px;border-radius:14px;max-width:900px;margin:15px auto;box-shadow:0 0 20px rgba(0,0,0,0.5);}"
-          ".section-title{font-size:20px;margin-bottom:15px;font-weight:500;color:#22c55e;}"
-          ".value-box{font-size:18px;margin:10px 0;font-weight:500;}"
-          ".button-row{display:flex;flex-wrap:wrap;justify-content:center;gap:10px;margin-top:15px;}"
-          ".btn{padding:12px 20px;font-size:15px;border:none;border-radius:10px;cursor:pointer;color:#fff;font-weight:500;transition:0.2s;}"
-          ".btn:hover{transform:translateY(-2px);opacity:0.9;}"
+          "*{box-sizing:border-box;}"
+          "body{font-family:Arial,sans-serif;background:#101317;color:#e5e7eb;margin:0;padding:16px;}"
+          "h1{color:#f8fafc;text-align:center;margin:0 0 18px 0;font-size:26px;font-weight:600;}"
+          ".card{background:#1a1f27;border:1px solid #2b3340;padding:18px;border-radius:12px;max-width:980px;margin:0 auto 14px auto;}"
+          ".section-title{font-size:18px;margin:0 0 10px 0;font-weight:600;color:#d1d5db;}"
+          ".stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:12px;}"
+          ".value-box{font-size:15px;margin:0;padding:10px 12px;background:#131821;border:1px solid #2b3340;border-radius:10px;}"
+          ".value-box strong{display:block;font-size:12px;color:#9ca3af;font-weight:600;margin-bottom:4px;letter-spacing:0.02em;}"
+          ".settings-row{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;background:#131821;border:1px solid #2b3340;border-radius:10px;padding:10px;margin-bottom:12px;}"
+          ".button-row{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:10px;}"
+          ".btn{padding:10px 14px;font-size:14px;border:none;border-radius:8px;cursor:pointer;color:#fff;font-weight:600;transition:opacity 0.2s;}"
+          ".btn:hover{opacity:0.9;}"
           ".btn-blue{background:#3b82f6;}"
           ".btn-green{background:#22c55e;}"
           ".btn-red{background:#ef4444;}"
           ".btn-orange{background:#f97316;}"
           ".btn-disabled{background:#555 !important;cursor:not-allowed;opacity:0.6;}"
-          ".log-container{display:flex;gap:15px;flex-wrap:wrap;margin-top:20px;}"
-          ".log-box{background:#141416;color:#eaeaea;padding:12px;overflow-y:auto;border-radius:10px;flex:1;height:260px;font-family:monospace;font-size:14px;}.chart-wrap{width:96%;max-width:750px;margin:20px auto;position:relative;}.chart-wrap.fullscreen{position:fixed;inset:20px;max-width:none;width:auto;height:auto;z-index:1000;background:#0d1117;padding:10px;border-radius:12px;}.chart-wrap.fullscreen #chart{height:calc(100vh - 80px) !important;}"
-          "#chart{width:100%;height:300px;display:block;border:1px solid #2a2a2c;border-radius:12px;background:#0f0f12;}"
-          ".sd-status{margin-top:18px;font-size:16px;display:flex;align-items:center;justify-content:center;gap:12px;}"
-          ".led{width:18px;height:18px;border-radius:50%;display:inline-block;box-shadow:0 0 10px rgba(0,0,0,0.5);}"
+          ".chart-wrap{width:100%;margin:14px 0;position:relative;}"
+          ".chart-wrap.fullscreen{position:fixed;inset:12px;max-width:none;width:auto;height:auto;z-index:1000;background:#101317;padding:8px;border-radius:12px;}"
+          ".chart-wrap.fullscreen #chart{height:calc(100vh - 70px) !important;}"
+          "#chart{width:100%;height:300px;display:block;border:1px solid #2b3340;border-radius:10px;background:#111827;}"
+          ".log-container{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:10px;margin-top:12px;}"
+          ".log-box{background:#131821;color:#e5e7eb;padding:12px;overflow-y:auto;border-radius:10px;border:1px solid #2b3340;height:220px;font-family:monospace;font-size:13px;line-height:1.4;}"
+          ".sd-status{margin-top:12px;font-size:15px;display:flex;align-items:center;justify-content:center;gap:10px;background:#131821;border:1px solid #2b3340;padding:10px;border-radius:10px;}"
+          ".led{width:14px;height:14px;border-radius:50%;display:inline-block;box-shadow:0 0 6px rgba(0,0,0,0.4);}"
           ".led.green{background:#4ade80;animation:blink 2s infinite;}"
           ".led.red{background:#ef4444;}"
           "@keyframes blink{0%,49%{opacity:1}50%,100%{opacity:0.25}}"
-          "input[type=number]{padding:6px;border-radius:8px;border:none;background:#2a2a2c;color:#fff;width:80px;}"
+          ".status-panel{font-size:14px;text-align:left;margin:10px auto 0 auto;max-width:320px;background:#131821;border:1px solid #2b3340;padding:12px;border-radius:10px;line-height:1.7;}"
+          "input[type=number]{padding:7px 8px;border-radius:8px;border:1px solid #374151;background:#0f172a;color:#fff;width:90px;}"
           "</style>";
 
   html += "<script src='https://cdn.jsdelivr.net/npm/chart.js'></script>";
@@ -313,15 +321,17 @@ String getPage() {
   html += "<div class='card'>";
   html += "<h1>Wasserrakete Dashboard</h1>";
 
-  html += "<div class='value-box'><strong>Flug:</strong> <span id='currentFlight'>" + String(flightNumber) + "</span></div>";
-  html += "<div class='value-box'>Höhe: <span id='alt'>0</span> m</div>";
-  html += "<div class='value-box'>Temperatur: <span id='temp'>0</span> °C</div>";
-  html += "<div class='value-box'>Peak: <span id='max'>0</span> m</div>";
-  html += "<div class='value-box'>Geschwindigkeit: <span id='speed'>0</span> km/h</div>";
-  html += "<div class='value-box'>Max. Geschwindigkeit: <span id='maxSpeed'>0</span> km/h</div>";
+  html += "<div class='stats-grid'>";
+  html += "<div class='value-box'><strong>Flug</strong><span id='currentFlight'>" + String(flightNumber) + "</span></div>";
+  html += "<div class='value-box'><strong>Höhe</strong><span id='alt'>0</span> m</div>";
+  html += "<div class='value-box'><strong>Temperatur</strong><span id='temp'>0</span> °C</div>";
+  html += "<div class='value-box'><strong>Peak</strong><span id='max'>0</span> m</div>";
+  html += "<div class='value-box'><strong>Geschwindigkeit</strong><span id='speed'>0</span> km/h</div>";
+  html += "<div class='value-box'><strong>Max. Geschwindigkeit</strong><span id='maxSpeed'>0</span> km/h</div>";
+  html += "</div>";
 
   // Fallhöhe
-  html += "<div class='value-box'>Auslösdifferenz: <input type='number' id='fallInput' value='" + String(fallTolerance,1) + "' step='0.1'> <button class='btn btn-green' onclick='setFall()'>💾</button></div>";
+  html += "<div class='settings-row'>Auslösdifferenz: <input type='number' id='fallInput' value='" + String(fallTolerance,1) + "' step='0.1'> <button class='btn btn-green' onclick='setFall()'>💾 Speichern</button></div>";
 
   // Aktion Buttons
   html += "<div class='button-row'>";
@@ -335,13 +345,13 @@ String getPage() {
   html += "</div>";
 
   // SD Status
-html += "<div class='sd-status'>SD-Status: <div id='sdLed' class='led red'></div> <span id='sdText'>🔴 Nicht speichert</span></div>";
+html += "<div class='sd-status'>SD-Status: <div id='sdLed' class='led red'></div> <span id='sdText'>🔴 Speichert nicht</span></div>";
 
 // Chart
 html += "<div class='chart-wrap' id='chartWrap'><canvas id='chart'></canvas></div>";
 
 // Download-Button für Diagramm
-html += "<div style='text-align:center;margin-top:10px;'>";
+html += "<div class='button-row'>";
 html += "<button class='btn btn-blue' onclick='downloadChart()'>📊 Diagramm herunterladen (PNG)</button>";
 html += " <button class='btn btn-orange' onclick='toggleFullscreenChart()' id='fullscreenBtn'>⛶ Vollbild</button>";
 html += "</div>";
@@ -352,12 +362,12 @@ html += "<div class='log-box' id='logBox'></div>";
 html += "<div class='log-box' id='eventBox'></div>";
 html += "</div>";
 
-html += "<button class='btn btn-orange' id='autoScrollBtn' onclick='toggleAutoScroll()' style='margin-top:10px;'>🔄 Auto-Scroll: AN</button>";
+html += "<button class='btn btn-orange' id='autoScrollBtn' onclick='toggleAutoScroll()'>🔄 Auto-Scroll: AN</button>";
 
 
   // Komponentenstatus
   html += "<h2 class='section-title'>🔧 Komponentenstatus</h2>";
-  html += "<div style='font-size:15px;text-align:left;margin:0 auto;width:260px;background:#1a1a1c;padding:15px;border-radius:10px;'>";
+  html += "<div class='status-panel'>";
   html += "BMP280: <span id='statusBMP'>?</span><br>";
   html += "Servo: <span id='statusServo'>?</span><br>";
   html += "WLAN: <span id='statusWiFi'>?</span><br>";
@@ -542,7 +552,7 @@ function setGround(){fetch('/setGround');}
 function newFlight(){
   fetch('/newFlight').then(()=>{
     flightNumber++;
-    document.getElementById('currentFlight').innerText='Flug '+flightNumber;
+    document.getElementById('currentFlight').innerText=flightNumber;
     chart.data.labels=[];
     chart.data.datasets[0].data=[];
     peakValue=0;
