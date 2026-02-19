@@ -22,11 +22,6 @@ const IPAddress ap_ip(192, 168, 4, 1);
 const IPAddress ap_gateway(192, 168, 4, 1);
 const IPAddress ap_subnet(255, 255, 255, 0);
 #endif
-const uint8_t ap_channel = 6;
-const uint8_t ap_max_clients = 8;
-const unsigned long wifiRetryInterval = 10000;
-unsigned long lastWiFiRetry = 0;
-
 // Webserver auf Port 80
 WebServer server(80);
 
@@ -370,150 +365,47 @@ html += "<button class='btn btn-orange' id='autoScrollBtn' onclick='toggleAutoSc
   // JavaScript für Chart mit Peak Marker
   html += R"rawliteral(
 <script>
-let canvas = document.getElementById('chart');
-let ctx = canvas.getContext('2d');
+let ctx = document.getElementById('chart').getContext('2d');
 let peakValue = 0;
 let peakTime = 0;
-let chart = null;
-
-function createFallbackChart(canvas, ctx) {
-    const fallback = {
-        data: { labels: [], datasets: [{ data: [] }] },
-        update: function() {
-            const labels = this.data.labels;
-            const values = this.data.datasets[0].data.map(v => Number(v));
-            const cssWidth = canvas.clientWidth || 750;
-            const cssHeight = canvas.clientHeight || 300;
-            if (canvas.width !== cssWidth) canvas.width = cssWidth;
-            if (canvas.height !== cssHeight) canvas.height = cssHeight;
-            const w = canvas.width;
-            const h = canvas.height;
-            ctx.clearRect(0, 0, w, h);
-            ctx.fillStyle = '#0f0f12';
-            ctx.fillRect(0, 0, w, h);
-
-            if (values.length < 2) return;
-
-            const minV = Math.min(...values);
-            const maxV = Math.max(...values);
-            const range = Math.max(1, maxV - minV);
-            const pad = 24;
-            const innerW = w - pad * 2;
-            const innerH = h - pad * 2;
-
-            ctx.strokeStyle = '#2a2a2c';
-            ctx.lineWidth = 1;
-            ctx.strokeRect(pad, pad, innerW, innerH);
-
-            ctx.beginPath();
-            values.forEach((v, i) => {
-                const x = pad + (i / Math.max(1, values.length - 1)) * innerW;
-                const y = pad + innerH - ((v - minV) / range) * innerH;
-                if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-            });
-            ctx.strokeStyle = 'cyan';
-            ctx.lineWidth = 2;
-            ctx.stroke();
-
-            // Peak markieren
-            const peak = Math.max(...values);
-            const peakIdx = values.indexOf(peak);
-            const peakX = pad + (peakIdx / Math.max(1, values.length - 1)) * innerW;
-            const peakY = pad + innerH - ((peak - minV) / range) * innerH;
-            ctx.beginPath();
-            ctx.arc(peakX, peakY, 5, 0, Math.PI * 2);
-            ctx.fillStyle = 'yellow';
-            ctx.fill();
-            ctx.fillStyle = '#eaeaea';
-            ctx.font = '12px sans-serif';
-            ctx.fillText(peak.toFixed(2) + ' m', Math.min(w - 90, peakX + 8), Math.max(14, peakY - 8));
-
-            // Achsenbeschriftung
-            ctx.fillStyle = '#eaeaea';
-            ctx.font = '12px sans-serif';
-            ctx.fillText('Zeit (s)', w / 2 - 22, h - 4);
-            ctx.save();
-            ctx.translate(10, h / 2 + 20);
-            ctx.rotate(-Math.PI / 2);
-            ctx.fillText('Höhe (m)', 0, 0);
-            ctx.restore();
-        },
-        toBase64Image: function() {
-            return canvas.toDataURL('image/png');
-        }
-    };
-    return fallback;
-}
-
-if (typeof Chart !== 'undefined') {
-    chart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'Höhe (m)',
-                data: [],
-                borderColor: 'cyan',
-                backgroundColor: 'rgba(0, 255, 255, 0.1)',
-                fill: true,
-                tension: 0.3,
-                pointBackgroundColor: function(context){
-                    let value = Number(context.raw);
-                    return value === peakValue ? 'yellow' : 'cyan';
-                },
-                pointRadius: function(context){
-                    let value = Number(context.raw);
-                    return value === peakValue ? 6 : 3;
-                }
-            }]
-        },
-let chart = null;
-
-if (typeof Chart !== 'undefined') {
-    chart = new Chart(ctx, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [{
-                label: 'Höhe (m)',
-                data: [],
-                borderColor: 'cyan',
-                backgroundColor: 'rgba(0, 255, 255, 0.1)',
-                fill: true,
-                tension: 0.3,
-                pointRadius: 3,
-                pointBackgroundColor: function(context){
-                    let value = context.raw;
-                    return value === peakValue ? 'yellow' : 'cyan';
-                }
-            }]
-        },
-        options: {
-            scales: {
-                x: { title: { display: true, text: 'Zeit (s)' } },
-                y: { title: { display: true, text: 'Höhe (m)' } }
+let chart = new Chart(ctx, {
+    type: 'line',
+    data: {
+        labels: [],
+        datasets: [{
+            label: 'Höhe (m)',
+            data: [],
+            borderColor: 'cyan',
+            backgroundColor: 'rgba(0, 255, 255, 0.1)',
+            fill: true,
+            tension: 0.3,
+            pointRadius: function(context){
+                const value = Number(context.raw);
+                return value === peakValue ? 6 : 3;
             },
-            plugins: { legend: { display: false } }
-        }
-    });
-} else {
-    console.warn('Chart.js konnte nicht geladen werden; nutze Fallback-Diagramm.');
-    chart = createFallbackChart(canvas, ctx);
-    console.warn('Chart.js konnte nicht geladen werden; Diagramm ist deaktiviert.');
-    let chartEl = document.getElementById('chart');
-    if (chartEl) chartEl.style.display = 'none';
-}
+            pointBackgroundColor: function(context){
+                const value = Number(context.raw);
+                return value === peakValue ? 'yellow' : 'cyan';
+            }
+        }]
+    },
+    options: {
+        scales: {
+            x: { title: { display: true, text: 'Zeit (s)' } },
+            y: { title: { display: true, text: 'Höhe (m)' } }
+        },
+        plugins: { legend: { display: false } }
+    }
+});
 
 let measuring = false;
 let autoScroll = true;
 let flightNumber = 1;
-document.getElementById('peakValueLabel').innerText = '0.00';
-document.getElementById('peakTimeLabel').innerText = '0';
 
 function toggleMeasurement(){
     measuring = !measuring;
     document.getElementById('startStopBtn').innerText = measuring ? '⏸ Stop' : '▶ Start';
-    if(measuring && chart) document.getElementById('chart').style.display='block';
+    if(measuring) document.getElementById('chart').style.display='block';
 }
 
 function toggleAutoScroll(){
@@ -523,12 +415,10 @@ function toggleAutoScroll(){
 
 function downloadChart(){
     const link = document.createElement('a');
-    if(!chart) return;
     link.href = chart.toBase64Image();
     link.download = 'flug_' + flightNumber + '_diagramm.png';
     link.click();
 }
-
 
 async function fetchData(){
     try {
@@ -538,53 +428,82 @@ async function fetchData(){
         document.getElementById('alt').innerText = d.alt.toFixed(2);
         document.getElementById('temp').innerText = d.temp.toFixed(2);
         document.getElementById('max').innerText = d.max.toFixed(2);
+
         let logBox = document.getElementById('logBox');
         let eventBox = document.getElementById('eventBox');
         logBox.innerHTML += '[' + Math.round(d.t/1000) + 's] Höhe: ' + d.alt.toFixed(2) + ' m | Temp: ' + d.temp.toFixed(2) + ' °C<br>';
         if(d.event && d.event.length>0) eventBox.innerHTML += '[' + Math.round(d.t/1000) + 's] ' + d.event + '<br>';
-        if(autoScroll){ logBox.scrollTop=logBox.scrollHeight; eventBox.scrollTop=eventBox.scrollHeight; }
-        if(measuring && chart){
+        if(autoScroll){
+          logBox.scrollTop=logBox.scrollHeight;
+          eventBox.scrollTop=eventBox.scrollHeight;
+        }
+
+        if(measuring){
             if(d.alt > peakValue){
                 peakValue = Number(d.alt.toFixed(2));
                 peakTime = Math.round(d.t/1000);
             }
             document.getElementById('peakValueLabel').innerText = peakValue.toFixed(2);
             document.getElementById('peakTimeLabel').innerText = peakTime;
-        if(d.alt > peakValue){
-            peakValue = Number(d.alt.toFixed(2));
-            peakTime = Math.round(d.t/1000);
-        }
-        document.getElementById('peakValueLabel').innerText = peakValue.toFixed(2);
-        document.getElementById('peakTimeLabel').innerText = peakTime;
-        if(chart){
-        if(measuring && chart){
-            if(d.alt > peakValue) peakValue = d.alt;
+
             chart.data.labels.push(Math.round(d.t/1000));
             chart.data.datasets[0].data.push(Number(d.alt.toFixed(2)));
-            if(chart.data.labels.length>100){ chart.data.labels.shift(); chart.data.datasets[0].data.shift(); }
+            if(chart.data.labels.length>100){
+              chart.data.labels.shift();
+              chart.data.datasets[0].data.shift();
+            }
             chart.update();
         }
+
         document.getElementById('statusBMP').innerText = d.statusBMP ? '✅ OK' : '❌ Fehler';
         document.getElementById('statusServo').innerText = d.statusServo ? '✅ OK' : '❌ Fehler';
         document.getElementById('statusWiFi').innerText = d.statusWiFi ? '📡 OK' : '❌ Kein WLAN';
         document.getElementById('statusSD').innerText = d.statusSD ? '💾 OK' : '❌ Fehler';
+
         let sdLed = document.getElementById('sdLed');
         let sdText = document.getElementById('sdText');
-        if(d.sdSaving){ sdLed.classList.remove('red'); sdLed.classList.add('green'); sdText.innerText = '🟢 Speichert'; }
-        else{ sdLed.classList.remove('green'); sdLed.classList.add('red'); sdText.innerText = '🔴 Speichert nicht'; }
-    } catch(e){ console.error(e); }
+        if(d.sdSaving){
+          sdLed.classList.remove('red');
+          sdLed.classList.add('green');
+          sdText.innerText = '🟢 Speichert';
+        } else {
+          sdLed.classList.remove('green');
+          sdLed.classList.add('red');
+          sdText.innerText = '🔴 Speichert nicht';
+        }
+    } catch(e){
+      console.error(e);
+    }
 }
-fetchData();
 setInterval(fetchData,1000);
 function deployParachute(){fetch('/deploy');}
-function resetAll(){fetch('/reset'); document.getElementById('logBox').innerHTML=''; document.getElementById('eventBox').innerHTML=''; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; peakTime=0; document.getElementById('peakValueLabel').innerText='0.00'; document.getElementById('peakTimeLabel').innerText='0'; chart.update(); }}
+function resetAll(){
+  fetch('/reset');
+  document.getElementById('logBox').innerHTML='';
+  document.getElementById('eventBox').innerHTML='';
+  chart.data.labels=[];
+  chart.data.datasets[0].data=[];
+  peakValue=0;
+  peakTime=0;
+  document.getElementById('peakValueLabel').innerText='0.00';
+  document.getElementById('peakTimeLabel').innerText='0';
+  chart.update();
+}
 function setFall(){let val=document.getElementById('fallInput').value;fetch('/setFall?value='+val);}
 function setGround(){fetch('/setGround');}
-function newFlight(){fetch('/newFlight').then(()=>{ flightNumber++; document.getElementById('currentFlight').innerText='Flug '+flightNumber; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; peakTime=0; document.getElementById('peakValueLabel').innerText='0.00'; document.getElementById('peakTimeLabel').innerText='0'; chart.update(); } });}
-function resetAll(){fetch('/reset'); document.getElementById('logBox').innerHTML=''; document.getElementById('eventBox').innerHTML=''; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update(); }}
-function setFall(){let val=document.getElementById('fallInput').value;fetch('/setFall?value='+val);}
-function setGround(){fetch('/setGround');}
-function newFlight(){fetch('/newFlight').then(()=>{ flightNumber++; document.getElementById('currentFlight').innerText='Flug '+flightNumber; if(chart){ chart.data.labels=[]; chart.data.datasets[0].data=[]; peakValue=0; chart.update(); } });}
+function newFlight(){
+  fetch('/newFlight').then(()=>{
+    flightNumber++;
+    document.getElementById('currentFlight').innerText='Flug '+flightNumber;
+    chart.data.labels=[];
+    chart.data.datasets[0].data=[];
+    peakValue=0;
+    peakTime=0;
+    document.getElementById('peakValueLabel').innerText='0.00';
+    document.getElementById('peakTimeLabel').innerText='0';
+    chart.update();
+  });
+}
 function toggleSD(){fetch('/toggleSD');}
 </script>
 )rawliteral";
@@ -1000,7 +919,6 @@ void loop() {
   Serial.print(" | Temp: ");
   Serial.print(currentTemperature);
   Serial.println(" C");
-  Serial.println(smoothedAltitude);
   if (smoothedAltitude > maxAltitudeSend) maxAltitudeSend = smoothedAltitude;
 
   altitudeHistory[historyIndex] = displayAltitude;
