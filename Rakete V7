@@ -288,16 +288,23 @@ String getPage() {
           ".card{background:#1a1f27;border:1px solid #2b3340;padding:18px;border-radius:12px;max-width:980px;margin:0 auto 14px auto;}"
           ".section-title{font-size:18px;margin:0 0 10px 0;font-weight:600;color:#d1d5db;}"
           ".stats-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-bottom:12px;}"
-          ".value-box{font-size:15px;margin:0;padding:10px 12px;background:#131821;border:1px solid #2b3340;border-radius:10px;}"
-          ".value-box strong{display:block;font-size:12px;color:#9ca3af;font-weight:600;margin-bottom:4px;letter-spacing:0.02em;}"
+          ".value-box{font-size:14px;margin:0;padding:8px 10px;background:#131821;border:1px solid #2b3340;border-radius:10px;line-height:1.25;}"
+          ".value-box strong{display:block;font-size:11px;color:#9ca3af;font-weight:600;margin-bottom:3px;letter-spacing:0.02em;}"
           ".settings-row{display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px;background:#131821;border:1px solid #2b3340;border-radius:10px;padding:10px;margin-bottom:12px;}"
+          ".settings-row .btn{margin-left:4px;}"
           ".button-row{display:flex;flex-wrap:wrap;justify-content:center;gap:8px;margin-top:10px;}"
+          ".button-row.single{margin-top:4px;}"
+          ".button-row.spaced{margin-top:14px;}"
+          ".auto-scroll-row{display:flex;justify-content:center;margin-top:16px;}"
+          ".status-title{margin-top:18px;}"
           ".btn{padding:10px 14px;font-size:14px;border:none;border-radius:8px;cursor:pointer;color:#fff;font-weight:600;transition:opacity 0.2s;}"
           ".btn:hover{opacity:0.9;}"
           ".btn-blue{background:#3b82f6;}"
           ".btn-green{background:#22c55e;}"
           ".btn-red{background:#ef4444;}"
           ".btn-orange{background:#f97316;}"
+          ".btn-autoscroll-on{background:#16a34a;}"
+          ".btn-autoscroll-off{background:#dc2626;}"
           ".btn-disabled{background:#555 !important;cursor:not-allowed;opacity:0.6;}"
           ".chart-wrap{width:100%;margin:14px 0;position:relative;}"
           ".chart-wrap.fullscreen{position:fixed;inset:12px;max-width:none;width:auto;height:auto;z-index:1000;background:#101317;padding:8px;border-radius:12px;}"
@@ -331,16 +338,22 @@ String getPage() {
   html += "</div>";
 
   // Fallhöhe
-  html += "<div class='settings-row'>Auslösdifferenz: <input type='number' id='fallInput' value='" + String(fallTolerance,1) + "' step='0.1'> <button class='btn btn-green' onclick='setFall()'>💾 Speichern</button></div>";
+  html += "<div class='settings-row'>Auslösdifferenz: <input type='number' id='fallInput' value='" + String(fallTolerance,1) + "' step='0.1'><button class='btn btn-green' onclick='setFall()'>💾 Speichern</button></div>";
 
   // Aktion Buttons
-  html += "<div class='button-row'>";
+  html += "<div class='button-row single'>";
   html += "<button id='deployBtn' class='btn btn-blue' onclick='deployParachute()'>🪂 Fallschirm</button>";
+  html += "</div>";
+  html += "<div class='button-row spaced'>";
   html += "<button class='btn btn-green' onclick='toggleMeasurement()' id='startStopBtn'>▶ Start</button>";
-  html += "<button class='btn btn-red' onclick='resetAll()'>🔄 Reset</button>";
-  html += "<button class='btn btn-orange' onclick='setGround()'>📌 Ground</button>";
-  html += "<button class='btn btn-blue' onclick=\"window.open('/download','_blank')\">📂 SD-Daten</button>";
   html += "<button class='btn btn-blue' onclick='newFlight()'>✈️ Neuer Flug</button>";
+  html += "</div>";
+  html += "<div class='button-row'>";
+  html += "<button class='btn btn-orange' onclick='setGround()'>📌 Ground</button>";
+  html += "<button class='btn btn-red' onclick='resetAll()'>🔄 Reset</button>";
+  html += "</div>";
+  html += "<div class='button-row'>";
+  html += "<button class='btn btn-blue' onclick=\"window.open('/download','_blank')\">📂 SD-Daten</button>";
   html += "<button class='btn btn-orange' onclick='toggleSD()'>💾 SD-Logging</button>";
   html += "</div>";
 
@@ -362,11 +375,11 @@ html += "<div class='log-box' id='logBox'></div>";
 html += "<div class='log-box' id='eventBox'></div>";
 html += "</div>";
 
-html += "<button class='btn btn-orange' id='autoScrollBtn' onclick='toggleAutoScroll()'>🔄 Auto-Scroll: AN</button>";
+html += "<div class='auto-scroll-row'><button class='btn btn-autoscroll-on' id='autoScrollBtn' onclick='toggleAutoScroll()'>🔄 Auto-Scroll: AN</button></div>";
 
 
   // Komponentenstatus
-  html += "<h2 class='section-title'>🔧 Komponentenstatus</h2>";
+  html += "<h2 class='section-title status-title'>🔧 Komponentenstatus</h2>";
   html += "<div class='status-panel'>";
   html += "BMP280: <span id='statusBMP'>?</span><br>";
   html += "Servo: <span id='statusServo'>?</span><br>";
@@ -460,7 +473,10 @@ document.addEventListener('fullscreenchange', ()=>{
 
 function toggleAutoScroll(){
     autoScroll = !autoScroll;
-    document.getElementById('autoScrollBtn').innerText = autoScroll ? '🔄 Auto-Scroll: AN' : '🔄 Auto-Scroll: AUS';
+    const autoScrollBtn = document.getElementById('autoScrollBtn');
+    autoScrollBtn.innerText = autoScroll ? '🔄 Auto-Scroll: AN' : '🔄 Auto-Scroll: AUS';
+    autoScrollBtn.classList.toggle('btn-autoscroll-on', autoScroll);
+    autoScrollBtn.classList.toggle('btn-autoscroll-off', !autoScroll);
 }
 
 function downloadChart(){
