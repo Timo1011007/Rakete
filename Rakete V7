@@ -317,7 +317,6 @@ String getPage() {
   html += "<div class='value-box'>Höhe: <span id='alt'>0</span> m</div>";
   html += "<div class='value-box'>Temperatur: <span id='temp'>0</span> °C</div>";
   html += "<div class='value-box'>Peak: <span id='max'>0</span> m</div>";
-  html += "<div class='value-box'>Höchster Messwert: <span id='peakValueLabel'>0.00</span> m (bei <span id='peakTimeLabel'>0</span> s)</div>";
 
   // Fallhöhe
   html += "<div class='value-box'>Auslösdifferenz: <input type='number' id='fallInput' value='" + String(fallTolerance,1) + "' step='0.1'> <button class='btn btn-green' onclick='setFall()'>💾</button></div>";
@@ -367,7 +366,6 @@ html += "<button class='btn btn-orange' id='autoScrollBtn' onclick='toggleAutoSc
 <script>
 let ctx = document.getElementById('chart').getContext('2d');
 let peakValue = 0;
-let peakTime = 0;
 let chart = new Chart(ctx, {
     type: 'line',
     data: {
@@ -431,7 +429,7 @@ async function fetchData(){
 
         let logBox = document.getElementById('logBox');
         let eventBox = document.getElementById('eventBox');
-        logBox.innerHTML += '[' + Math.round(d.t/1000) + 's] Höhe: ' + d.alt.toFixed(2) + ' m | Temp: ' + d.temp.toFixed(2) + ' °C<br>';
+        logBox.innerHTML += '[' + Math.round(d.t/1000) + 's] Höhe: ' + d.alt.toFixed(2) + ' m<br>';
         if(d.event && d.event.length>0) eventBox.innerHTML += '[' + Math.round(d.t/1000) + 's] ' + d.event + '<br>';
         if(autoScroll){
           logBox.scrollTop=logBox.scrollHeight;
@@ -441,18 +439,14 @@ async function fetchData(){
         if(measuring){
             if(d.alt > peakValue){
                 peakValue = Number(d.alt.toFixed(2));
-                peakTime = Math.round(d.t/1000);
             }
-            document.getElementById('peakValueLabel').innerText = peakValue.toFixed(2);
-            document.getElementById('peakTimeLabel').innerText = peakTime;
-
             chart.data.labels.push(Math.round(d.t/1000));
             chart.data.datasets[0].data.push(Number(d.alt.toFixed(2)));
             if(chart.data.labels.length>100){
               chart.data.labels.shift();
               chart.data.datasets[0].data.shift();
             }
-            chart.update();
+          chart.update();
         }
 
         document.getElementById('statusBMP').innerText = d.statusBMP ? '✅ OK' : '❌ Fehler';
@@ -484,9 +478,6 @@ function resetAll(){
   chart.data.labels=[];
   chart.data.datasets[0].data=[];
   peakValue=0;
-  peakTime=0;
-  document.getElementById('peakValueLabel').innerText='0.00';
-  document.getElementById('peakTimeLabel').innerText='0';
   chart.update();
 }
 function setFall(){let val=document.getElementById('fallInput').value;fetch('/setFall?value='+val);}
@@ -498,9 +489,6 @@ function newFlight(){
     chart.data.labels=[];
     chart.data.datasets[0].data=[];
     peakValue=0;
-    peakTime=0;
-    document.getElementById('peakValueLabel').innerText='0.00';
-    document.getElementById('peakTimeLabel').innerText='0';
     chart.update();
   });
 }
@@ -916,9 +904,7 @@ void loop() {
   Serial.print(currentAltitude);
   Serial.print(" m | geglättet: ");
   Serial.print(smoothedAltitude);
-  Serial.print(" | Temp: ");
-  Serial.print(currentTemperature);
-  Serial.println(" C");
+  Serial.println();
   if (smoothedAltitude > maxAltitudeSend) maxAltitudeSend = smoothedAltitude;
 
   altitudeHistory[historyIndex] = displayAltitude;
