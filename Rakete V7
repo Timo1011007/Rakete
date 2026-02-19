@@ -19,6 +19,10 @@ unsigned long lastWiFiRetry = 0;
 const IPAddress ap_ip(192, 168, 4, 1);
 const IPAddress ap_gateway(192, 168, 4, 1);
 const IPAddress ap_subnet(255, 255, 255, 0);
+const uint8_t ap_channel = 6;
+const uint8_t ap_max_clients = 8;
+const unsigned long wifiRetryInterval = 10000;
+unsigned long lastWiFiRetry = 0;
 
 // Webserver auf Port 80
 WebServer server(80);
@@ -214,6 +218,8 @@ bool ensureAccessPoint(bool forceRestart = false) {
   WiFi.setSleep(false);
   WiFi.softAPConfig(ap_ip, ap_gateway, ap_subnet);
   delay(100);
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
 
   bool apStarted = WiFi.softAP(ap_ssid, ap_password, ap_channel, false, ap_max_clients);
   if (apStarted) {
