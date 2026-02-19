@@ -12,6 +12,10 @@
 // --- Access Point Daten ---
 const char* ap_ssid = "Wasserrakete";
 const char* ap_password = "12345678";
+const uint8_t ap_channel = 6;
+const uint8_t ap_max_clients = 8;
+const unsigned long wifiRetryInterval = 10000;
+unsigned long lastWiFiRetry = 0;
 
 // Webserver auf Port 80
 WebServer server(80);
@@ -188,6 +192,34 @@ void setGroundLevel() {
   logData("GROUNDSET,," + String(millis() / 1000.0) + ",Ground-Level neu gesetzt");
 }
 
+
+bool ensureAccessPoint(bool forceRestart = false) {
+  bool apRunning = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) && WiFi.softAPIP() != IPAddress(0,0,0,0);
+
+  if (!forceRestart && apRunning) {
+    statusWiFi = true;
+    return true;
+  }
+
+  WiFi.mode(WIFI_AP);
+  WiFi.setSleep(false);
+
+  bool apStarted = WiFi.softAP(ap_ssid, ap_password, ap_channel, false, ap_max_clients);
+  if (apStarted) {
+    IPAddress ip = WiFi.softAPIP();
+    statusWiFi = true;
+    Serial.print("📡 WLAN/AP aktiv. IP: ");
+    Serial.println(ip);
+    logData("STATUS,WIFI," + String(millis() / 1000.0) + ",AP aktiv: " + ip.toString());
+  } else {
+    statusWiFi = false;
+    Serial.println("❌ WLAN/AP Start fehlgeschlagen!");
+    logData("STATUS,WIFI," + String(millis() / 1000.0) + ",AP Start fehlgeschlagen");
+  }
+
+  return apStarted;
+}
+
 void checkComponentStatus() {
   static bool lastStatusBMP = statusBMP;
   static bool lastStatusServo = statusServo;
@@ -214,8 +246,7 @@ if (currentBMP != lastStatusBMP) {
   }
 
   // --- WiFi ---
-  bool currentWiFi = WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA;
-  bool currentWiFi = WiFi.softAPgetStationNum() > 0;
+  bool currentWiFi = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) && WiFi.softAPIP() != IPAddress(0,0,0,0);
   if (currentWiFi != lastStatusWiFi) {
     statusWiFi = currentWiFi;
     lastEvent = currentWiFi ? "📡 WLAN verbunden!" : "❌ WLAN getrennt!";
@@ -595,13 +626,7 @@ void setup() {
   Serial.println(fallTolerance);
 
   // --- WiFi ---
-  WiFi.mode(WIFI_AP);
-  WiFi.setSleep(false);
-  bool apStarted = WiFi.softAP(ap_ssid, ap_password, 1, false, 8);
-  IPAddress IP = WiFi.softAPIP();
-  Serial.print("📡 Access Point gestartet: ");
-  Serial.println(IP);
-  statusWiFi = apStarted;
+  bool apStarted = ensureAccessPoint(true);
   if (!apStarted) {
     lastEvent = "❌ WLAN AP Start fehlgeschlagen!";
     Serial.println(lastEvent);
@@ -920,6 +945,14 @@ void loop() {
   if (millis() - lastStatusCheck >= 1000) {
     lastStatusCheck = millis();
     checkComponentStatus();
+  }
+
+  bool apRunning = (WiFi.getMode() == WIFI_AP || WiFi.getMode() == WIFI_AP_STA) && WiFi.softAPIP() != IPAddress(0,0,0,0);
+  if (!apRunning && (millis() - lastWiFiRetry >= wifiRetryInterval)) {
+    lastWiFiRetry = millis();
+    lastEvent = "⚠️ WLAN getrennt, AP wird neu gestartet...";
+    Serial.println(lastEvent);
+    ensureAccessPoint(true);
   }
 
   // LED blinkt bei OK
