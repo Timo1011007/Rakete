@@ -317,8 +317,8 @@ String getPage() {
   html += "<div class='value-box'>Höhe: <span id='alt'>0</span> m</div>";
   html += "<div class='value-box'>Temperatur: <span id='temp'>0</span> °C</div>";
   html += "<div class='value-box'>Peak: <span id='max'>0</span> m</div>";
-  html += "<div class='value-box'>Geschwindigkeit: <span id='speed'>0</span> m/s</div>";
-  html += "<div class='value-box'>Max. Geschwindigkeit: <span id='maxSpeed'>0</span> m/s</div>";
+  html += "<div class='value-box'>Geschwindigkeit: <span id='speed'>0</span> km/h</div>";
+  html += "<div class='value-box'>Max. Geschwindigkeit: <span id='maxSpeed'>0</span> km/h</div>";
 
   // Fallhöhe
   html += "<div class='value-box'>Auslösdifferenz: <input type='number' id='fallInput' value='" + String(fallTolerance,1) + "' step='0.1'> <button class='btn btn-green' onclick='setFall()'>💾</button></div>";
@@ -373,6 +373,8 @@ let maxSpeedValue = 0;
 let lastAlt = null;
 let lastTime = null;
 const chartWrap = document.getElementById('chartWrap');
+const chartCanvas = document.getElementById('chart');
+const defaultChartHeight = '300px';
 
 let chart = new Chart(ctx, {
     type: 'line',
@@ -418,10 +420,17 @@ let measuring = false;
 let autoScroll = true;
 let flightNumber = 1;
 
+applyChartSize(false);
+
 function toggleMeasurement(){
     measuring = !measuring;
     document.getElementById('startStopBtn').innerText = measuring ? '⏸ Stop' : '▶ Start';
     if(measuring) document.getElementById('chart').style.display='block';
+}
+
+function applyChartSize(isFullscreen){
+  chartCanvas.style.height = isFullscreen ? 'calc(100vh - 80px)' : defaultChartHeight;
+  chart.resize();
 }
 
 function toggleFullscreenChart(){
@@ -436,7 +445,7 @@ document.addEventListener('fullscreenchange', ()=>{
   const isFs = document.fullscreenElement === chartWrap;
   chartWrap.classList.toggle('fullscreen', isFs);
   document.getElementById('fullscreenBtn').innerText = isFs ? '🡼 Vollbild verlassen' : '⛶ Vollbild';
-  chart.resize();
+  applyChartSize(isFs);
 });
 
 function toggleAutoScroll(){
@@ -459,14 +468,15 @@ async function fetchData(){
         document.getElementById('alt').innerText = d.alt.toFixed(2);
         document.getElementById('temp').innerText = d.temp.toFixed(2);
         document.getElementById('max').innerText = d.max.toFixed(2);
-        let speed = 0;
+        let speedKmh = 0;
         if(lastTime !== null && d.t > lastTime){
-          speed = (d.alt - lastAlt) / ((d.t - lastTime) / 1000);
-          maxSpeedValue = Math.max(maxSpeedValue, Math.abs(speed));
+          const speedMs = (d.alt - lastAlt) / ((d.t - lastTime) / 1000);
+          speedKmh = speedMs * 3.6;
+          maxSpeedValue = Math.max(maxSpeedValue, Math.abs(speedKmh));
         }
         lastAlt = d.alt;
         lastTime = d.t;
-        document.getElementById('speed').innerText = speed.toFixed(2);
+        document.getElementById('speed').innerText = speedKmh.toFixed(2);
         document.getElementById('maxSpeed').innerText = maxSpeedValue.toFixed(2);
 
         let logBox = document.getElementById('logBox');
