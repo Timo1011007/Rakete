@@ -540,7 +540,7 @@ async function fetchData(){
         document.getElementById('max').innerText = d.max.toFixed(2);
         let logBox = document.getElementById('logBox');
         let eventBox = document.getElementById('eventBox');
-        logBox.innerHTML += '[' + Math.round(d.t/1000) + 's] Höhe: ' + d.alt.toFixed(2) + ' m<br>';
+        logBox.innerHTML += '[' + Math.round(d.t/1000) + 's] Höhe: ' + d.alt.toFixed(2) + ' m | Temp: ' + d.temp.toFixed(2) + ' °C<br>';
         if(d.event && d.event.length>0) eventBox.innerHTML += '[' + Math.round(d.t/1000) + 's] ' + d.event + '<br>';
         if(autoScroll){ logBox.scrollTop=logBox.scrollHeight; eventBox.scrollTop=eventBox.scrollHeight; }
         if(measuring && chart){
